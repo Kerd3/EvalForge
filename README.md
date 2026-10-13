@@ -1,5 +1,7 @@
 # EvalForge
 
+[![EvalForge automated tests](https://github.com/Kerd3/EvalForge/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/Kerd3/EvalForge/actions/workflows/test.yml)
+
 **AI Agent Evaluation & Reliability Platform** — a backend-heavy portfolio project built with Node.js, Express, JavaScript, PostgreSQL, Redis, and BullMQ.
 
 EvalForge runs repeatable test cases against an AI application, grades the outputs, records execution traces, and compares runs to detect regressions. It includes a deterministic mock provider, so the initial demo works without an LLM API key.
@@ -258,5 +260,6 @@ Portfolio project. Add a license if you plan to publish or reuse it under specif
 Run `npm install`, then `npm test` for the complete unit, API integration, and regression suite. Run `npm run test:regression` to focus on critical behavior: context-aware abstention, required/forbidden tool grading, quota-driven Gemini fallback attribution, zero/missing pricing handling, and model-level cost aggregation.
 
 A GitHub Actions workflow at `.github/workflows/test.yml` runs both commands on pushes and pull requests. It uses deterministic fixtures and does not require live Gemini/OpenAI credentials or a running database. See [REGRESSION-TESTING.md](./REGRESSION-TESTING.md) for scope and limitations.
-#   E v a l F o r g e  
+#   E v a l F o r g e 
+ 
  
