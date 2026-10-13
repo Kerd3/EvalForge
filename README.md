@@ -260,6 +260,3 @@ Portfolio project. Add a license if you plan to publish or reuse it under specif
 Run `npm install`, then `npm test` for the complete unit, API integration, and regression suite. Run `npm run test:regression` to focus on critical behavior: context-aware abstention, required/forbidden tool grading, quota-driven Gemini fallback attribution, zero/missing pricing handling, and model-level cost aggregation.
 
 A GitHub Actions workflow at `.github/workflows/test.yml` runs both commands on pushes and pull requests. It uses deterministic fixtures and does not require live Gemini/OpenAI credentials or a running database. See [REGRESSION-TESTING.md](./REGRESSION-TESTING.md) for scope and limitations.
-#   E v a l F o r g e 
- 
- 
