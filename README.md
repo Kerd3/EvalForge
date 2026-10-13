@@ -2,7 +2,7 @@
 
 [![EvalForge automated tests](https://github.com/Kerd3/EvalForge/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/Kerd3/EvalForge/actions/workflows/test.yml)
 
-**AI Agent Evaluation & Reliability Platform** — a backend-heavy portfolio project built with Node.js, Express, JavaScript, PostgreSQL, Redis, and BullMQ.
+**AI Agent Evaluation & Reliability Platform** - a backend-heavy portfolio project built with Node.js, Express, JavaScript, PostgreSQL, Redis, and BullMQ.
 
 EvalForge runs repeatable test cases against an AI application, grades the outputs, records execution traces, and compares runs to detect regressions. It includes a deterministic mock provider, so the initial demo works without an LLM API key.
 
@@ -108,7 +108,7 @@ Cost estimates use the **actual model that answered each case**, including a fal
 
    Model-specific rates take priority. If an exact model rate is missing or incomplete, EvalForge uses the provider-wide `GEMINI_INPUT_COST_PER_1M_USD` / `GEMINI_OUTPUT_COST_PER_1M_USD` values only when both are configured, and labels that estimate as provider-wide rather than model-specific. If neither complete source is available, cost is shown as unavailable with an explanation; EvalForge does not guess pricing. Setting both rates to `0` is an explicit zero-rate configuration and should only be used when you have verified the applicable requests are free of charge. Cost rates are snapshotted into each result when the run happens; historical runs aren't silently recalculated when `.env` changes. The run inspector reports input/output tokens, rate source, estimated USD cost, and any pricing gaps for each actual model. These are estimates using the configured per-token input/output rate only; cached-token discounts, multimodal pricing, batch discounts, taxes, and other provider-specific billing adjustments are not automatically inferred.
 
-Important: the Gemini free tier has model-specific limits, and Google states that free-tier content may be used to improve its products. Use synthetic/demo data—not confidential company, customer, or personal information—when using a free-tier key. Consult the [current Gemini pricing and tier information](https://ai.google.dev/gemini-api/docs/pricing) for current limits and terms.
+Important: the Gemini free tier has model-specific limits, and Google states that free-tier content may be used to improve its products. Use synthetic/demo data-not confidential company, customer, or personal information-when using a free-tier key. Consult the [current Gemini pricing and tier information](https://ai.google.dev/gemini-api/docs/pricing) for current limits and terms.
 
 Gemini function calls are captured for evaluation but are **not executed** by EvalForge. This keeps tests side-effect-free and lets the grader assess whether the model proposed the expected tool.
 
