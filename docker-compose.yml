@@ -1,0 +1,97 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: evalforge
+      POSTGRES_PASSWORD: evalforge_dev_password
+      POSTGRES_DB: evalforge
+    ports:
+      - "5432:5432"
+    volumes:
+      - evalforge_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evalforge -d evalforge"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - evalforge_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    command: sh -c "npm run db:migrate && npm run db:seed && npm start"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgres://evalforge:evalforge_dev_password@postgres:5432/evalforge
+      REDIS_URL: redis://redis:6379
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      DEFAULT_OPENAI_MODEL: ${DEFAULT_OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_INPUT_COST_PER_1M_USD: ${OPENAI_INPUT_COST_PER_1M_USD:-}
+      OPENAI_OUTPUT_COST_PER_1M_USD: ${OPENAI_OUTPUT_COST_PER_1M_USD:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      DEFAULT_GEMINI_MODEL: ${DEFAULT_GEMINI_MODEL:-gemini-3.8-flash}
+      GEMINI_FALLBACK_MODELS: ${GEMINI_FALLBACK_MODELS-gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-2.5-flash-lite}
+      GEMINI_MIN_REQUEST_INTERVAL_MS: ${GEMINI_MIN_REQUEST_INTERVAL_MS:-13000}
+      GEMINI_DEFAULT_QUOTA_COOLDOWN_MS: ${GEMINI_DEFAULT_QUOTA_COOLDOWN_MS:-60000}
+      GEMINI_INPUT_COST_PER_1M_USD: ${GEMINI_INPUT_COST_PER_1M_USD:-}
+      GEMINI_OUTPUT_COST_PER_1M_USD: ${GEMINI_OUTPUT_COST_PER_1M_USD:-}
+      MODEL_COST_RATES_JSON: ${MODEL_COST_RATES_JSON:-}
+      EVAL_CONCURRENCY: ${EVAL_CONCURRENCY:-3}
+      EVAL_MAX_ATTEMPTS: ${EVAL_MAX_ATTEMPTS:-3}
+      EVAL_LOCK_DURATION_MS: ${EVAL_LOCK_DURATION_MS:-120000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  worker:
+    build: .
+    command: npm run worker
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://evalforge:evalforge_dev_password@postgres:5432/evalforge
+      REDIS_URL: redis://redis:6379
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      DEFAULT_OPENAI_MODEL: ${DEFAULT_OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_INPUT_COST_PER_1M_USD: ${OPENAI_INPUT_COST_PER_1M_USD:-}
+      OPENAI_OUTPUT_COST_PER_1M_USD: ${OPENAI_OUTPUT_COST_PER_1M_USD:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      DEFAULT_GEMINI_MODEL: ${DEFAULT_GEMINI_MODEL:-gemini-3.8-flash}
+      GEMINI_FALLBACK_MODELS: ${GEMINI_FALLBACK_MODELS-gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-2.5-flash-lite}
+      GEMINI_MIN_REQUEST_INTERVAL_MS: ${GEMINI_MIN_REQUEST_INTERVAL_MS:-13000}
+      GEMINI_DEFAULT_QUOTA_COOLDOWN_MS: ${GEMINI_DEFAULT_QUOTA_COOLDOWN_MS:-60000}
+      GEMINI_INPUT_COST_PER_1M_USD: ${GEMINI_INPUT_COST_PER_1M_USD:-}
+      GEMINI_OUTPUT_COST_PER_1M_USD: ${GEMINI_OUTPUT_COST_PER_1M_USD:-}
+      MODEL_COST_RATES_JSON: ${MODEL_COST_RATES_JSON:-}
+      EVAL_CONCURRENCY: ${EVAL_CONCURRENCY:-3}
+      EVAL_MAX_ATTEMPTS: ${EVAL_MAX_ATTEMPTS:-3}
+      EVAL_LOCK_DURATION_MS: ${EVAL_LOCK_DURATION_MS:-120000}
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  evalforge_pgdata:
+  evalforge_redisdata:
