@@ -1,6 +1,26 @@
 import { randomUUID } from 'node:crypto';
 import { pool } from '../db/pool.js';
 
+async function insertTestCases(client, versionId, testCases) {
+  for (let index = 0; index < testCases.length; index += 1) {
+    const testCase = testCases[index];
+    await client.query(
+      `INSERT INTO test_cases
+        (id, dataset_version_id, position_index, name, input, expected_output, required_keywords,
+         forbidden_keywords, required_tools, forbidden_tools, tools, grading_rules)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [
+        randomUUID(), versionId, index, testCase.name ?? `Test case ${index + 1}`,
+        JSON.stringify(testCase.input),
+        testCase.expected_output === undefined ? null : JSON.stringify(testCase.expected_output),
+        testCase.required_keywords ?? [], testCase.forbidden_keywords ?? [],
+        testCase.required_tools ?? [], testCase.forbidden_tools ?? [],
+        JSON.stringify(testCase.tools ?? []), JSON.stringify(testCase.grading_rules ?? {})
+      ]
+    );
+  }
+}
+
 export async function createDataset(data) {
   const client = await pool.connect();
   const datasetId = randomUUID();
@@ -15,23 +35,47 @@ export async function createDataset(data) {
       'INSERT INTO dataset_versions(id, dataset_id, version_number) VALUES ($1, $2, 1)',
       [versionId, datasetId]
     );
-    for (let index = 0; index < data.test_cases.length; index += 1) {
-      const testCase = data.test_cases[index];
-      await client.query(
-        `INSERT INTO test_cases
-          (id, dataset_version_id, name, input, expected_output, required_keywords,
-           forbidden_keywords, required_tools, forbidden_tools, tools, grading_rules)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-        [
-          randomUUID(), versionId, testCase.name ?? `Test case ${index + 1}`,
-          JSON.stringify(testCase.input),
-          testCase.expected_output === undefined ? null : JSON.stringify(testCase.expected_output),
-          testCase.required_keywords ?? [], testCase.forbidden_keywords ?? [],
-          testCase.required_tools ?? [], testCase.forbidden_tools ?? [],
-          JSON.stringify(testCase.tools ?? []), JSON.stringify(testCase.grading_rules ?? {})
-        ]
-      );
+    await insertTestCases(client, versionId, data.test_cases);
+    await client.query('COMMIT');
+    return getDatasetById(datasetId);
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Save edits as an immutable new dataset version. A row lock serializes
+ * concurrent saves so two edits cannot choose the same version number.
+ */
+export async function createDatasetVersion(datasetId, data) {
+  const client = await pool.connect();
+  const versionId = randomUUID();
+  try {
+    await client.query('BEGIN');
+    const datasetResult = await client.query('SELECT id FROM datasets WHERE id = $1 FOR UPDATE', [datasetId]);
+    if (!datasetResult.rows[0]) {
+      await client.query('ROLLBACK');
+      return null;
     }
+
+    const currentVersion = await client.query(
+      'SELECT COALESCE(MAX(version_number), 0)::int AS latest_version FROM dataset_versions WHERE dataset_id = $1',
+      [datasetId]
+    );
+    const nextVersion = Number(currentVersion.rows[0]?.latest_version ?? 0) + 1;
+
+    await client.query(
+      'INSERT INTO dataset_versions(id, dataset_id, version_number) VALUES ($1, $2, $3)',
+      [versionId, datasetId, nextVersion]
+    );
+    await insertTestCases(client, versionId, data.test_cases);
+    await client.query(
+      'UPDATE datasets SET name = $2, description = $3, updated_at = NOW() WHERE id = $1',
+      [datasetId, data.name, data.description ?? '']
+    );
     await client.query('COMMIT');
     return getDatasetById(datasetId);
   } catch (error) {
@@ -54,7 +98,7 @@ export async function listDatasets() {
      ) v ON TRUE
      LEFT JOIN test_cases tc ON tc.dataset_version_id = v.id
      GROUP BY d.id, v.id, v.version_number
-     ORDER BY d.created_at DESC`
+     ORDER BY d.updated_at DESC, d.created_at DESC`
   );
   return rows;
 }
@@ -80,8 +124,9 @@ export async function getDatasetById(datasetId) {
   const { rows: cases } = dataset.latest_version_id
     ? await pool.query(
       `SELECT id, name, input, expected_output, required_keywords, forbidden_keywords,
-              required_tools, forbidden_tools, tools, grading_rules
-       FROM test_cases WHERE dataset_version_id = $1 ORDER BY created_at, name`, [dataset.latest_version_id]
+              required_tools, forbidden_tools, tools, grading_rules, created_at
+       FROM test_cases WHERE dataset_version_id = $1
+       ORDER BY position_index ASC, created_at, name`, [dataset.latest_version_id]
     )
     : { rows: [] };
   return { ...dataset, versions, test_cases: cases };

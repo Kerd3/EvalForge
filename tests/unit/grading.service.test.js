@@ -30,6 +30,36 @@ describe('gradeCase', () => {
     expect(gradeCase(testCase, { content: 'It is definitely allowed.', toolCalls: [] }).passed).toBe(false);
   });
 
+  it('recognizes an explicit statement that the policy makes no mention of a detail', () => {
+    const testCase = {
+      input: { message: 'Who pays return shipping for a damaged item?' },
+      required_keywords: [], forbidden_keywords: [], required_tools: [], forbidden_tools: [],
+      grading_rules: { mustAbstain: true }
+    };
+    const response = {
+      content: 'Based on the provided policy, there is no mention of who pays return shipping.',
+      toolCalls: []
+    };
+    const result = gradeCase(testCase, response);
+    expect(result.passed).toBe(true);
+    expect(result.graders.find((grader) => grader.name === 'abstention')).toMatchObject({ passed: true, score: 1 });
+  });
+
+  it('recognizes abstention when the policy does not specify an exception', () => {
+    const testCase = {
+      input: { message: 'Can I return an item after 45 days?' },
+      required_keywords: [], forbidden_keywords: [], required_tools: [], forbidden_tools: [],
+      grading_rules: { mustAbstain: true }
+    };
+    const response = {
+      content: 'Based on the provided policy, eligible items may be returned within 30 days of delivery. The policy does not specify whether exceptions are allowed after this stated deadline.',
+      toolCalls: []
+    };
+    const result = gradeCase(testCase, response);
+    expect(result.passed).toBe(true);
+    expect(result.graders.find((grader) => grader.name === 'abstention')).toMatchObject({ passed: true, score: 1 });
+  });
+
   it('checks exact match after case and whitespace normalization', () => {
     const result = gradeCase({
       expected_output: 'Approved successfully', required_keywords: [], forbidden_keywords: [], required_tools: [], forbidden_tools: [],

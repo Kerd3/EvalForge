@@ -19,8 +19,14 @@ const schema = z.object({
   OPENAI_OUTPUT_COST_PER_1M_USD: optionalNumber,
   GEMINI_API_KEY: z.string().optional().default(''),
   DEFAULT_GEMINI_MODEL: z.string().min(1).default('gemini-3.8-flash'),
-  // Ordered fallback chain used only when a Gemini model hits HTTP 429/quota limits.
+  // Ordered fallback chain used after Gemini quota/rate-limit errors or request timeouts.
   GEMINI_FALLBACK_MODELS: z.string().default('gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-2.5-flash-lite'),
+  // Per-request Gemini HTTP timeout; model fallback handles timeout failures.
+  GEMINI_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(5000).max(180000).default(45000),
+  // How long to avoid a model after a request timeout before trying it again.
+  GEMINI_DEFAULT_TIMEOUT_COOLDOWN_MS: z.coerce.number().int().min(1000).max(3600000).default(60000),
+  // How long to avoid a Gemini model after a temporary service error such as HTTP 503.
+  GEMINI_DEFAULT_UNAVAILABLE_COOLDOWN_MS: z.coerce.number().int().min(1000).max(3600000).default(30000),
   // Conservative spacing for free-tier projects. This setting applies across Gemini models.
   GEMINI_MIN_REQUEST_INTERVAL_MS: z.coerce.number().int().min(0).max(300000).default(13000),
   // When a 429 has no retry hint, temporarily avoid the model before trying it again.

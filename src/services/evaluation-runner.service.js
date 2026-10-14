@@ -29,6 +29,10 @@ export async function processEvaluationRun(runId) {
   }
 
   await updateRunStatus(runId, 'running');
+  // Cancellation may race with provider initialization. Do not begin work or
+  // emit a started event if another request already moved the run to a terminal state.
+  const startedRun = await getEvaluationById(runId);
+  if (!startedRun || startedRun.status !== 'running') return;
   await addAuditEvent(runId, 'evaluation.started', { caseCount: context.cases.length });
 
   for (const testCase of context.cases) {
@@ -165,8 +169,10 @@ export async function processEvaluationRun(runId) {
     await updateRunStatus(runId, 'failed', completed.error_message);
     return;
   }
-  await updateRunStatus(runId, 'completed');
-  await addAuditEvent(runId, 'evaluation.finished', {
-    inputSummary: serializeInput({ completedCases: completed?.completed_cases, totalCases: completed?.total_cases })
-  });
+  const markedCompleted = await updateRunStatus(runId, 'completed');
+  if (markedCompleted) {
+    await addAuditEvent(runId, 'evaluation.finished', {
+      inputSummary: serializeInput({ completedCases: completed?.completed_cases, totalCases: completed?.total_cases })
+    });
+  }
 }

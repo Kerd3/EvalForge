@@ -164,6 +164,116 @@ describe('Gemini model fallback strategy', () => {
     expect(response.providerMetadata.fallbackReason).toContain('primary-model');
   });
 
+  it('switches to the next model after a request timeout and records timeout fallback metadata', async () => {
+    const calls = [];
+    const cooldowns = new Map();
+    const cooldownReasons = new Map();
+    const response = await generateWithGeminiFallback({
+      models: ['slow-model', 'fallback-model'],
+      cooldowns,
+      cooldownReasons,
+      now: () => 1000,
+      timeoutCooldownMs: 60000,
+      args: {},
+      generateForModel: async (model) => {
+        calls.push(model);
+        if (model === 'slow-model') {
+          const error = new Error('Gemini request timed out after 45000 ms.');
+          error.name = 'TimeoutError';
+          error.code = 'GEMINI_REQUEST_TIMEOUT';
+          error.providerTimeout = true;
+          throw error;
+        }
+        return { content: 'Fallback response', toolCalls: [], providerMetadata: {} };
+      }
+    });
+
+    expect(calls).toEqual(['slow-model', 'fallback-model']);
+    expect(cooldowns.get('slow-model')).toBe(61000);
+    expect(cooldownReasons.get('slow-model')).toBe('timeout');
+    expect(response.providerMetadata).toMatchObject({
+      requestedModel: 'slow-model', actualModel: 'fallback-model', fallbackUsed: true
+    });
+    expect(response.providerMetadata.fallbackReason).toContain('timed out');
+  });
+
+  it('falls back to the next model when Gemini returns HTTP 503 high demand', async () => {
+    const calls = [];
+    const cooldowns = new Map();
+    const cooldownReasons = new Map();
+    const response = await generateWithGeminiFallback({
+      models: ['busy-model', 'fallback-model'],
+      cooldowns,
+      cooldownReasons,
+      now: () => 1000,
+      unavailableCooldownMs: 30000,
+      args: {},
+      generateForModel: async (model) => {
+        calls.push(model);
+        if (model === 'busy-model') {
+          const error = new Error('LLM provider returned HTTP 503: model is experiencing high demand.');
+          error.statusCode = 503;
+          throw error;
+        }
+        return { content: 'Grounded fallback response', toolCalls: [], providerMetadata: {} };
+      }
+    });
+
+    expect(calls).toEqual(['busy-model', 'fallback-model']);
+    expect(cooldowns.get('busy-model')).toBe(31000);
+    expect(cooldownReasons.get('busy-model')).toBe('provider-unavailable');
+    expect(response.content).toBe('Grounded fallback response');
+    expect(response.providerMetadata).toMatchObject({
+      requestedModel: 'busy-model', actualModel: 'fallback-model', fallbackUsed: true
+    });
+    expect(response.providerMetadata.fallbackReason).toContain('HTTP 503');
+  });
+
+  it('reports a provider-unavailable error if all configured models return HTTP 503', async () => {
+    const cooldowns = new Map();
+    const cooldownReasons = new Map();
+    await expect(generateWithGeminiFallback({
+      models: ['busy-model', 'also-busy-model'],
+      cooldowns,
+      cooldownReasons,
+      now: () => 1000,
+      unavailableCooldownMs: 30000,
+      args: {},
+      generateForModel: async (model) => {
+        const error = new Error(`LLM provider returned HTTP 503 for ${model}: high demand.`);
+        error.statusCode = 503;
+        throw error;
+      }
+    })).rejects.toMatchObject({
+      statusCode: 503,
+      code: 'GEMINI_MODELS_UNAVAILABLE',
+      quotaExhausted: false,
+      providerUnavailable: true
+    });
+  });
+
+  it('returns an explicit timeout error when all configured models time out', async () => {
+    const cooldowns = new Map();
+    const cooldownReasons = new Map();
+    await expect(generateWithGeminiFallback({
+      models: ['slow-model'],
+      cooldowns,
+      cooldownReasons,
+      now: () => 1000,
+      timeoutCooldownMs: 60000,
+      args: {},
+      generateForModel: async () => {
+        const error = new Error('Gemini request timed out after 45000 ms.');
+        error.name = 'TimeoutError';
+        error.code = 'GEMINI_REQUEST_TIMEOUT';
+        error.providerTimeout = true;
+        throw error;
+      }
+    })).rejects.toMatchObject({
+      statusCode: 504, providerTimeout: true, code: 'GEMINI_REQUEST_TIMEOUT'
+    });
+  });
+
   it('skips a model already in cooldown without calling it again', async () => {
     const calls = [];
     const cooldowns = new Map([['primary-model', 5000]]);

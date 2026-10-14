@@ -1,9 +1,15 @@
 const state = {
   datasets: [],
   runs: [],
+  runsPage: 1,
+  runsPageSize: 10,
   selectedRun: null,
+  selectedCampaignId: null,
+  selectedCampaign: null,
   selectedCompareRuns: [],
-  selectedDatasetId: null
+  selectedDatasetId: null,
+  editingDatasetId: null,
+  editingDatasetVersion: null
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -191,9 +197,11 @@ async function refreshHealth() {
 
 async function refreshAll({ quiet = false } = {}) {
   try {
-    const [datasets, runs] = await Promise.all([api('/api/datasets'), api('/api/evaluations?limit=50')]);
+    const [datasets, runs] = await Promise.all([api('/api/datasets'), api('/api/evaluations?limit=100')]);
+    const previousLatestRunId = state.runs[0]?.id ?? null;
     state.datasets = datasets;
     state.runs = runs;
+    if (runs[0]?.id && runs[0].id !== previousLatestRunId) state.runsPage = 1;
     renderDatasets();
     renderRuns();
     renderMetrics();
@@ -205,6 +213,8 @@ async function refreshAll({ quiet = false } = {}) {
     // queued/running, leaving stale details after the run completed.
     if (state.selectedRun) {
       await openRunDetails(state.selectedRun.id, { quiet: true });
+    } else if (state.selectedCampaignId) {
+      await openCampaignDetails(state.selectedCampaignId, { quiet: true });
     }
   } catch (error) {
     if (!quiet) showToast(error.message, 'error');
@@ -238,13 +248,66 @@ function renderMetrics() {
   $('#metric-latency').innerHTML = averageLatency === null ? '—<small>ms</small>' : `${number(averageLatency)}<small>ms</small>`;
 }
 
+function renderRunsPagination(totalRuns, totalPages) {
+  const footer = $('.table-footer');
+  if (!footer) return;
+
+  let container = $('#runs-pagination');
+  if (!container) {
+    container = document.createElement('nav');
+    container.id = 'runs-pagination';
+    container.className = 'runs-pagination';
+    container.setAttribute('aria-label', 'Recent evaluation run pages');
+    footer.insertAdjacentElement('afterend', container);
+  }
+
+  if (totalRuns === 0 || totalPages <= 1) {
+    container.hidden = true;
+    container.innerHTML = '';
+    return;
+  }
+
+  container.hidden = false;
+  const currentPage = Number(state.runsPage) || 1;
+  const pageButtons = Array.from({ length: totalPages }, (_, index) => {
+    const page = index + 1;
+    const current = page === currentPage;
+    return       `<button type="button" class="run-page-button${current ? ' active' : ''}" data-run-page="${page}" aria-label="Go to page ${page}" ${current ? 'aria-current="page"' : ''}>${page}</button>`;
+  }).join('');
+
+  container.innerHTML =     `<div class="runs-pagination-controls">
+      <button type="button" class="run-page-button run-page-step" data-run-page="${currentPage - 1}" ${currentPage <= 1 ? 'disabled' : ''}>← Previous</button>
+      <div class="run-page-numbers">${pageButtons}</div>
+      <button type="button" class="run-page-button run-page-step" data-run-page="${currentPage + 1}" ${currentPage >= totalPages ? 'disabled' : ''}>Next →</button>
+    </div>`;
+
+  container.querySelectorAll('button[data-run-page]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextPage = Number(button.dataset.runPage);
+      if (!Number.isInteger(nextPage) || nextPage < 1 || nextPage > totalPages || nextPage === currentPage) return;
+      state.runsPage = nextPage;
+      renderRuns();
+    });
+  });
+}
+
 function renderRuns() {
   const tbody = $('#runs-table-body');
-  $('#runs-count').textContent = `Showing ${state.runs.length} run${state.runs.length === 1 ? '' : 's'}`;
+  const pageSize = Number(state.runsPageSize) || 10;
+  const totalRunCount = state.runs.length;
+  const totalRunPages = Math.max(1, Math.ceil(totalRunCount / pageSize));
+  state.runsPage = Math.min(Math.max(1, Number(state.runsPage) || 1), totalRunPages);
+  const runPageStart = totalRunCount ? (state.runsPage - 1) * pageSize : 0;
+  const visibleRuns = state.runs.slice(runPageStart, runPageStart + pageSize);
+  const firstVisibleRun = totalRunCount ? runPageStart + 1 : 0;
+  const lastVisibleRun = Math.min(runPageStart + pageSize, totalRunCount);
+  $('#runs-count').textContent = totalRunCount
+    ? `Showing ${firstVisibleRun}–${lastVisibleRun} of ${totalRunCount} runs`
+    : 'Showing 0 runs';
   if (!state.runs.length) {
     tbody.innerHTML = '<tr><td colspan="5" class="empty-cell">No evaluation runs yet. Start your first run above.</td></tr>';
   } else {
-    tbody.innerHTML = state.runs.map((run) => {
+    tbody.innerHTML = visibleRuns.map((run) => {
       const rate = runPassRate(run);
       const metric = run.status === 'running' || run.status === 'queued'
         ? `${number(run.completed_cases)}/${number(run.total_cases)}`
@@ -257,16 +320,23 @@ function renderRuns() {
       const routingSummary = actualModels.length
         ? `<span class="run-model-note">Actual: ${escapeHtml(actualModels.join(', '))}${fallbackCount ? ` · fallback ${fallbackCount}/${respondedCount || fallbackCount}` : ''}</span>`
         : (run.status === 'queued' || run.status === 'running') ? '<span class="run-model-note muted">Awaiting model responses</span>' : '';
+      const repetitionLabel = run.campaign_id
+        ? `<span class="run-model-note campaign-status-note">Reliability campaign · repeat ${number(run.repetition_index)} of ${number(run.campaign_repeat_count)}</span>`
+        : '';
+      const campaignAction = run.campaign_id && Number(run.repetition_index) === 1
+        ? `<button class="mini-action inspect-campaign" data-campaign-id="${escapeHtml(run.campaign_id)}" title="Inspect repeated-run reliability" aria-label="Inspect repeated-run reliability">◉</button>`
+        : '';
       return `<tr>
-        <td><div class="run-name" title="${escapeHtml(run.id)}">${escapeHtml(run.dataset_name ?? 'Evaluation run')}</div><span class="run-sub">${escapeHtml(run.provider)} / requested: ${escapeHtml(run.model)}</span>${routingSummary}</td>
+        <td><div class="run-name" title="${escapeHtml(run.id)}">${escapeHtml(run.dataset_name ?? 'Evaluation run')}</div><span class="run-sub">${escapeHtml(run.provider)} / requested: ${escapeHtml(run.model)}</span>${routingSummary}${repetitionLabel}</td>
         <td><span class="status-pill ${escapeHtml(run.status)}">${escapeHtml(statusLabel(run.status))}</span></td>
         <td class="rate-cell">${escapeHtml(metric)}${run.status === 'completed' ? `<span class="rate-track"><span class="rate-fill" style="display:block;width:${rate}%;"></span></span>` : ''}</td>
         <td class="date-cell">${escapeHtml(formatDate(run.created_at))}</td>
-        <td><div class="row-actions"><button class="mini-action inspect-run" data-run-id="${escapeHtml(run.id)}" title="Inspect run" aria-label="Inspect run">↗</button>${canCompare ? `<input class="compare-checkbox" type="checkbox" data-compare-id="${escapeHtml(run.id)}" aria-label="Select run to compare" ${isChecked ? 'checked' : ''}>` : ''}</div></td>
+        <td><div class="row-actions"><button class="mini-action inspect-run" data-run-id="${escapeHtml(run.id)}" title="Inspect run" aria-label="Inspect run">↗</button>${campaignAction}${canCompare ? `<input class="compare-checkbox" type="checkbox" data-compare-id="${escapeHtml(run.id)}" aria-label="Select run to compare" ${isChecked ? 'checked' : ''}>` : ''}</div></td>
       </tr>`;
     }).join('');
   }
   renderCompareBar();
+  renderRunsPagination(totalRunCount, totalRunPages);
 }
 
 function renderDatasets() {
@@ -281,7 +351,10 @@ function renderDatasets() {
     <div class="dataset-title">${escapeHtml(dataset.name)}</div>
     <p class="dataset-description">${escapeHtml(dataset.description || 'No description provided.')}</p>
     <div class="dataset-meta"><span>${number(dataset.test_case_count)} TESTS</span><span>v${escapeHtml(dataset.latest_version ?? 1)}</span></div>
-    <button class="dataset-run" data-dataset-id="${escapeHtml(dataset.id)}">Run evaluation →</button>
+    <div class="dataset-actions">
+      <button class="dataset-run" data-dataset-id="${escapeHtml(dataset.id)}">Run evaluation →</button>
+      <button class="dataset-edit" data-edit-dataset-id="${escapeHtml(dataset.id)}">Edit dataset</button>
+    </div>
   </article>`).join('');
 }
 
@@ -368,10 +441,98 @@ function renderModelReport(run) {
   $('#model-report-note').textContent = notices.join(' ');
 }
 
+function campaignCostLabel(report) {
+  if (report.total_estimated_cost_usd !== null && report.total_estimated_cost_usd !== undefined) {
+    return formatUsd(report.total_estimated_cost_usd);
+  }
+  if (report.cost_estimate_status === 'partial') return `Partial · ${formatUsd(report.known_cost_subtotal_usd ?? 0)}`;
+  return 'Unavailable';
+}
+
+async function openCampaignDetails(campaignId, { quiet = false } = {}) {
+  try {
+    const campaign = await api(`/api/evaluation-campaigns/${encodeURIComponent(campaignId)}`);
+    state.selectedCampaignId = campaignId;
+    state.selectedCampaign = campaign;
+    state.selectedRun = null;
+    $('#run-detail-panel').hidden = true;
+    $('#campaign-detail-panel').hidden = false;
+    $('#campaign-detail-title').textContent = `${campaign.dataset_name} · Reliability campaign`;
+    $('#cancel-campaign-button').hidden = !['queued', 'running'].includes(campaign.status);
+
+    const report = campaign.reliability ?? {};
+    const interval = report.pass_rate_confidence_interval_95;
+    const intervalLabel = interval ? `${interval.low}%–${interval.high}%` : 'Need 2+ analyzed repeats';
+    const passRateLabel = report.average_pass_rate_percentage == null ? '—' : `${report.average_pass_rate_percentage}%`;
+    const sdLabel = report.pass_rate_stddev_percentage_points == null ? '—' : `${report.pass_rate_stddev_percentage_points} pp`;
+    const rangeLabel = report.minimum_pass_rate_percentage == null ? '—' : `${report.minimum_pass_rate_percentage}%–${report.maximum_pass_rate_percentage}%`;
+    const stabilityLabel = report.case_stability_percentage == null ? 'Need 2+ answers per case' : `${report.case_stability_percentage}%`;
+    const latencyLabel = report.average_case_latency_ms == null ? '—' : formatLatency(report.average_case_latency_ms);
+    const completedLabel = `${number(report.completed_runs)} / ${number(report.planned_runs)} completed`;
+    const cards = [
+      ['Campaign status', statusLabel(campaign.status)],
+      ['Completed repeats', completedLabel],
+      ['Mean pass rate', passRateLabel],
+      ['Run-to-run SD', sdLabel],
+      ['Pass-rate range', rangeLabel],
+      ['95% CI of mean', intervalLabel],
+      ['Case stability', stabilityLabel],
+      ['Average case latency', latencyLabel],
+      ['Total estimated cost', campaignCostLabel(report)]
+    ];
+    $('#campaign-detail-summary').innerHTML = cards.map(([label, value]) => `<div class="detail-stat"><span>${escapeHtml(label)}</span><strong title="${escapeHtml(value)}">${escapeHtml(value)}</strong></div>`).join('');
+
+    const notes = [report.interpretation?.pass_rate, report.interpretation?.confidence_interval, report.interpretation?.model_routing, report.interpretation?.cost]
+      .filter(Boolean);
+    if (campaign.error_message) notes.unshift(`Campaign error: ${campaign.error_message}`);
+    if (campaign.status === 'queued' || campaign.status === 'running') notes.unshift(`Progress: ${number(report.completed_runs)} of ${number(report.planned_runs)} repetitions have finished. Analysis updates as the campaign progresses.`);
+    $('#campaign-interpretation').textContent = notes.join(' ');
+
+    const runs = Array.isArray(report.run_summaries) ? report.run_summaries : [];
+    $('#campaign-run-count').textContent = `${runs.length} repetition${runs.length === 1 ? '' : 's'}`;
+    $('#campaign-runs-body').innerHTML = runs.length ? runs.map((run) => {
+      const rate = run.pass_rate_percentage == null ? '—' : `${run.pass_rate_percentage}%`;
+      const cost = run.estimated_cost_usd == null ? 'Unavailable' : formatUsd(run.estimated_cost_usd);
+      const models = Array.isArray(run.actual_model_names) && run.actual_model_names.length ? run.actual_model_names.join(', ') : 'Not observed yet';
+      return `<tr>
+        <td><strong>Repeat ${number(run.repetition_index)}</strong><small>${escapeHtml(String(run.id).slice(0, 8))}</small></td>
+        <td><span class="status-pill ${escapeHtml(run.status)}">${escapeHtml(statusLabel(run.status))}</span></td>
+        <td>${escapeHtml(rate)}<small>${number(run.answered_cases)} answered</small></td>
+        <td>${number(run.passed_cases)} / ${number(run.failed_cases)} / ${number(run.error_cases)}</td>
+        <td>${escapeHtml(formatLatency(run.average_latency_ms))}</td>
+        <td>${escapeHtml(cost)}</td>
+        <td>${escapeHtml(models)}${run.fallback_cases ? `<small>Fallback cases: ${number(run.fallback_cases)}</small>` : ''}</td>
+        <td><button class="text-link inspect-campaign-run" data-run-id="${escapeHtml(run.id)}">Inspect ↗</button></td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="8" class="empty-cell">No repetitions have been created.</td></tr>';
+
+    const cases = Array.isArray(report.per_case) ? report.per_case : [];
+    $('#campaign-cases-body').innerHTML = cases.length ? cases.map((item) => {
+      const rate = item.pass_rate_percentage == null ? '—' : `${item.pass_rate_percentage}%`;
+      const consistency = item.status_consistency_percentage == null ? 'Not enough answers' : `${item.status_consistency_percentage}%`;
+      const pct = item.status_consistency_percentage == null ? 0 : Number(item.status_consistency_percentage);
+      const models = Array.isArray(item.actual_models) && item.actual_models.length ? item.actual_models.join(', ') : 'Not observed';
+      return `<tr>
+        <td><strong class="run-name">${escapeHtml(item.test_case_name)}</strong><small>${escapeHtml(String(item.test_case_id).slice(0, 8))}</small></td>
+        <td>${escapeHtml(rate)}<small>${number(item.answered_runs)} answered repeats</small></td>
+        <td>${number(item.passed_runs)} / ${number(item.failed_runs)} / ${number(item.error_runs)}</td>
+        <td class="consistency-cell"><strong>${escapeHtml(consistency)}</strong>${item.status_consistency_percentage == null ? '' : `<span class="consistency-track"><span style="width:${pct}%;"></span></span>`}<small>${item.stable_across_repeats ? 'Stable pass/fail result' : 'May vary across repetitions'}</small></td>
+        <td>${escapeHtml(models)}</td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="5" class="empty-cell">Per-case consistency will appear after completed repetitions.</td></tr>';
+    if (!quiet) $('#campaign-detail-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (error) {
+    if (!quiet) showToast(error.message, 'error');
+  }
+}
+
 async function openRunDetails(runId, { quiet = false } = {}) {
   try {
     const run = await api(`/api/evaluations/${encodeURIComponent(runId)}`);
     state.selectedRun = run;
+    state.selectedCampaignId = null;
+    state.selectedCampaign = null;
+    $('#campaign-detail-panel').hidden = true;
     $('#run-detail-panel').hidden = false;
     $('#detail-title').textContent = `${run.dataset_name} · Run details`;
     $('#cancel-run-button').hidden = !['queued', 'running'].includes(run.status);
@@ -441,7 +602,44 @@ function inspectResult(index) {
   inspection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+function resetDatasetEditor({ clearJson = false } = {}) {
+  state.editingDatasetId = null;
+  state.editingDatasetVersion = null;
+  $('#import-dataset-title').textContent = 'Import a dataset';
+  $('#dataset-form-description').textContent = 'Create a versioned dataset by pasting test cases. Use the example to see supported grading rules.';
+  $('#import-submit').textContent = '＋ Create dataset';
+  $('#cancel-dataset-edit-button').hidden = true;
+  if (clearJson) $('#dataset-json').value = '';
+}
+
+async function editDataset(datasetId) {
+  try {
+    const dataset = await api(`/api/datasets/${encodeURIComponent(datasetId)}`);
+    // The editor accepts the dataset schema, not database-only fields such as
+    // test case IDs and timestamps. Existing versions remain immutable.
+    const testCases = (dataset.test_cases ?? []).map(({ id, created_at, position_index, ...testCase }) => testCase);
+    const editable = {
+      name: dataset.name,
+      description: dataset.description ?? '',
+      test_cases: testCases
+    };
+    state.editingDatasetId = dataset.id;
+    state.editingDatasetVersion = Number(dataset.latest_version ?? 1);
+    $('#dataset-json').value = JSON.stringify(editable, null, 2);
+    $('#import-dataset-title').textContent = `Edit dataset · v${state.editingDatasetVersion}`;
+    $('#dataset-form-description').textContent = `Editing ${dataset.name}. Saving creates version ${state.editingDatasetVersion + 1}; prior versions and their evaluation history are preserved.`;
+    $('#import-submit').textContent = `Save as version ${state.editingDatasetVersion + 1}`;
+    $('#cancel-dataset-edit-button').hidden = false;
+    setMessage('#import-form-message', `Loaded ${dataset.name} v${state.editingDatasetVersion} for editing.`);
+    $('#import-dataset').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    $('#dataset-json').focus({ preventScroll: true });
+  } catch (error) {
+    showToast(`Could not load dataset: ${error.message}`, 'error');
+  }
+}
+
 function loadExampleJson() {
+  resetDatasetEditor();
   const example = {
     name: 'My AI agent tests',
     description: 'Smoke tests for a customer-support agent.',
@@ -468,11 +666,25 @@ $('#run-form').addEventListener('submit', async (event) => {
       model: $('#model-input').value.trim() || undefined,
       system_prompt: $('#system-prompt').value
     };
-    const run = await api('/api/evaluations', { method: 'POST', body: JSON.stringify(payload) });
-    setMessage('#run-form-message', `Evaluation queued: ${run.id}`, 'success');
-    showToast('Evaluation run queued successfully.');
-    await refreshAll({ quiet: true });
-    await openRunDetails(run.id);
+    const repeatCount = Number($('#repeat-count').value || 1);
+    if (!Number.isInteger(repeatCount) || repeatCount < 1 || repeatCount > 10) {
+      throw new Error('Repeated runs must be an integer between 1 and 10.');
+    }
+    if (repeatCount === 1) {
+      const run = await api('/api/evaluations', { method: 'POST', body: JSON.stringify(payload) });
+      setMessage('#run-form-message', `Evaluation queued: ${run.id}`, 'success');
+      showToast('Evaluation run queued successfully.');
+      await refreshAll({ quiet: true });
+      await openRunDetails(run.id);
+    } else {
+      const campaign = await api('/api/evaluation-campaigns', {
+        method: 'POST', body: JSON.stringify({ ...payload, repeat_count: repeatCount })
+      });
+      setMessage('#run-form-message', `Reliability campaign queued: ${campaign.id} (${repeatCount} repeats)`, 'success');
+      showToast(`Reliability campaign queued with ${repeatCount} repetitions.`);
+      await refreshAll({ quiet: true });
+      await openCampaignDetails(campaign.id);
+    }
   } catch (error) {
     setMessage('#run-form-message', error.message, 'error');
     showToast(error.message, 'error');
@@ -505,14 +717,22 @@ $('#import-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const button = $('#import-submit');
   button.disabled = true;
-  setMessage('#import-form-message', 'Validating and saving dataset…');
+  setMessage('#import-form-message', state.editingDatasetId ? 'Validating changes and saving a new dataset version…' : 'Validating and saving dataset…');
   try {
     let body;
     try { body = JSON.parse($('#dataset-json').value); }
     catch { throw new Error('Dataset JSON is not valid. Check commas, quotation marks, and brackets.'); }
-    const dataset = await api('/api/datasets', { method: 'POST', body: JSON.stringify(body) });
-    setMessage('#import-form-message', `Created ${dataset.name} with ${dataset.test_cases.length} test cases.`, 'success');
-    showToast('Dataset created successfully.');
+    const wasEditing = Boolean(state.editingDatasetId);
+    const endpoint = wasEditing ? `/api/datasets/${encodeURIComponent(state.editingDatasetId)}` : '/api/datasets';
+    const dataset = await api(endpoint, { method: wasEditing ? 'PUT' : 'POST', body: JSON.stringify(body) });
+    if (wasEditing) {
+      setMessage('#import-form-message', `Saved ${dataset.name} as version ${dataset.latest_version} with ${dataset.test_cases.length} test cases. Previous versions and existing evaluation history were preserved.`, 'success');
+      showToast(`Saved ${dataset.name} v${dataset.latest_version}.`);
+      resetDatasetEditor();
+    } else {
+      setMessage('#import-form-message', `Created ${dataset.name} with ${dataset.test_cases.length} test cases.`, 'success');
+      showToast('Dataset created successfully.');
+    }
     state.selectedDatasetId = dataset.id;
     await refreshAll({ quiet: true });
     $('#dataset-select').value = dataset.id;
@@ -525,16 +745,46 @@ $('#import-form').addEventListener('submit', async (event) => {
   }
 });
 
+$('#cancel-dataset-edit-button').addEventListener('click', () => {
+  resetDatasetEditor({ clearJson: true });
+  setMessage('#import-form-message', 'Dataset edit cancelled. No new version was saved.');
+});
+
 $('#load-example-button').addEventListener('click', loadExampleJson);
 $('#refresh-button').addEventListener('click', () => refreshAll());
 $('#runs-refresh').addEventListener('click', () => refreshAll());
 $('#new-run-button').addEventListener('click', () => $('#create-run-panel').scrollIntoView({ behavior: 'smooth', block: 'start' }));
 $('#scroll-datasets').addEventListener('click', () => $('#datasets').scrollIntoView({ behavior: 'smooth', block: 'start' }));
 $('#close-detail-button').addEventListener('click', () => { $('#run-detail-panel').hidden = true; state.selectedRun = null; });
+$('#close-campaign-button').addEventListener('click', () => {
+  $('#campaign-detail-panel').hidden = true;
+  state.selectedCampaign = null;
+  state.selectedCampaignId = null;
+});
 
 $('#runs-table-body').addEventListener('click', async (event) => {
+  const campaignButton = event.target.closest('.inspect-campaign');
+  if (campaignButton) { await openCampaignDetails(campaignButton.dataset.campaignId); return; }
   const button = event.target.closest('.inspect-run');
   if (button) await openRunDetails(button.dataset.runId);
+});
+
+$('#campaign-runs-body').addEventListener('click', async (event) => {
+  const button = event.target.closest('.inspect-campaign-run');
+  if (button) await openRunDetails(button.dataset.runId);
+});
+
+$('#cancel-campaign-button').addEventListener('click', async () => {
+  if (!state.selectedCampaignId) return;
+  const button = $('#cancel-campaign-button');
+  button.disabled = true;
+  try {
+    await api(`/api/evaluation-campaigns/${encodeURIComponent(state.selectedCampaignId)}/cancel`, { method: 'POST', body: '{}' });
+    showToast('Campaign cancellation requested. The active model request may finish before stopping.');
+    await openCampaignDetails(state.selectedCampaignId, { quiet: true });
+    await refreshAll({ quiet: true });
+  } catch (error) { showToast(error.message, 'error'); }
+  finally { button.disabled = false; }
 });
 $('#runs-table-body').addEventListener('change', (event) => {
   const checkbox = event.target.closest('.compare-checkbox');
@@ -557,7 +807,12 @@ $('#results-table-body').addEventListener('click', (event) => {
   const button = event.target.closest('.inspect-result');
   if (button) inspectResult(Number(button.dataset.resultIndex));
 });
-$('#dataset-grid').addEventListener('click', (event) => {
+$('#dataset-grid').addEventListener('click', async (event) => {
+  const editButton = event.target.closest('.dataset-edit');
+  if (editButton) {
+    await editDataset(editButton.dataset.editDatasetId);
+    return;
+  }
   const button = event.target.closest('.dataset-run');
   if (!button) return;
   state.selectedDatasetId = button.dataset.datasetId;
@@ -608,6 +863,7 @@ $('#view-all-runs').addEventListener('click', (event) => {
 
 refreshAll();
 window.setInterval(async () => {
-  const hasActiveRun = state.runs.some((run) => ['queued', 'running'].includes(run.status));
+  const hasActiveRun = state.runs.some((run) => ['queued', 'running'].includes(run.status))
+    || ['queued', 'running'].includes(state.selectedCampaign?.status);
   if (hasActiveRun) await refreshAll({ quiet: true });
 }, 3500);

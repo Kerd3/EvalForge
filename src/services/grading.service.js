@@ -87,9 +87,15 @@ export function gradeCase(testCase, response) {
       /\b(?:information|evidence|context|details|data)\s+(?:provided|available|supplied)?\s*(?:is|are)\s+(?:not enough|insufficient|inadequate)\b/i,
       /\binsufficient\s+to\s+(?:confirm|determine|verify|establish|answer|assess|conclude)\b/i,
       /\b(?:cannot|can't|can not|unable to|not able to)\s+(?:confirm|determine|verify|establish|answer|assess|conclude)\b/i,
-      /\b(?:the\s+)?(?:provided|available|supplied)\s+(?:policy|information|context|documentation)\s+(?:does not|doesn't|do not|don't)\s+(?:specify|state|say|establish|cover|address)\b/i,
+      /\b(?:the\s+)?(?:provided|available|supplied)\s+(?:policy|information|context|documentation)\s+(?:does not|doesn't|do not|don't)\s+(?:specify|state|say|establish|cover|address|indicate|mention|provide)\b/i,
+      // Also accept natural variants that omit "provided/supplied", e.g.
+      // "The policy does not specify whether exceptions are allowed".
+      /\b(?:the\s+)?policy\s+(?:does not|doesn't|do not|don't)\s+(?:specify|state|say|establish|cover|address|indicate|mention|provide)\b/i,
+      /\b(?:not|never)\s+(?:specified|stated|addressed|provided|mentioned)\s+(?:in|by)\s+(?:the\s+)?(?:available|provided|supplied)?\s*(?:policy|information|context|documentation)\b/i,
       /\b(?:cannot|can't|unable to)\s+(?:tell|say)\s+(?:whether|if)\b/i,
-      /\bno\s+(?:policy|information|details|evidence)\s+(?:was|were|is|are)\s+(?:provided|available|supplied)\b/i
+      /\bno\s+(?:policy|information|details|evidence)\s+(?:was|were|is|are)\s+(?:provided|available|supplied)\b/i,
+      // Recognize explicit absence-of-mention statements, e.g. "there is no mention of who pays return shipping".
+      /\bthere\s+(?:is|are|was|were)\s+no\s+(?:explicit\s+)?(?:mention|information|detail|indication|statement|reference)\s+(?:of|about|regarding|on|as\s+to)\b/i
     ];
     const passed = abstentionPatterns.some((pattern) => pattern.test(content));
     graders.push(makeCheck('abstention', passed,

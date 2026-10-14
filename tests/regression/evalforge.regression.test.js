@@ -23,7 +23,19 @@ describe('EvalForge critical-path regression suite', () => {
       content: 'No. Most retailers do not accept returns after 180 days.',
       toolCalls: []
     });
+    const policyDoesNotSpecifyAnswer = gradeCase(contextAwareAbstentionCase, {
+      content: 'The policy does not specify whether exceptions are allowed after this stated deadline.',
+      toolCalls: []
+    });
+    const noMentionAnswer = gradeCase(contextAwareAbstentionCase, {
+      content: 'Based on the provided policy, there is no mention of who pays return shipping.',
+      toolCalls: []
+    });
 
+    expect(noMentionAnswer.passed).toBe(true);
+    expect(noMentionAnswer.graders.find((grader) => grader.name === 'abstention').passed).toBe(true);
+    expect(policyDoesNotSpecifyAnswer.passed).toBe(true);
+    expect(policyDoesNotSpecifyAnswer.graders.find((grader) => grader.name === 'abstention').passed).toBe(true);
     expect(safeAnswer.passed).toBe(true);
     expect(safeAnswer.graders.find((grader) => grader.name === 'abstention').passed).toBe(true);
     expect(speculativeAnswer.passed).toBe(false);

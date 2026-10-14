@@ -21,6 +21,20 @@ export function createDatasetsRouter({ datasetService }) {
     } catch (error) { next(error); }
   });
 
+  // Dataset edits are saved as a new immutable version. Existing runs keep
+  // pointing at the version of the test cases they originally evaluated.
+  router.put('/:id', async (req, res, next) => {
+    try {
+      if (!z.string().uuid().safeParse(req.params.id).success) {
+        throw new HttpError(400, 'Dataset id must be a valid UUID');
+      }
+      const parsed = createDatasetSchema.safeParse(req.body);
+      if (!parsed.success) throw new HttpError(400, 'Invalid dataset payload', parsed.error.issues);
+      const dataset = await datasetService.createVersion(req.params.id, parsed.data);
+      res.json({ data: dataset });
+    } catch (error) { next(error); }
+  });
+
   router.get('/:id', async (req, res, next) => {
     try {
       if (!z.string().uuid().safeParse(req.params.id).success) throw new HttpError(400, 'Dataset id must be a valid UUID');

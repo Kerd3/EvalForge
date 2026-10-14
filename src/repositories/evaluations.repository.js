@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { pool } from '../db/pool.js';
 import { buildModelReport } from '../services/model-reporting.service.js';
+import { buildReliabilityReport } from '../services/reliability-analysis.service.js';
 
 export async function createEvaluationRun({ datasetId, datasetVersionId, provider, model, systemPrompt }) {
   const client = await pool.connect();
@@ -27,7 +28,7 @@ export async function createEvaluationRun({ datasetId, datasetVersionId, provide
       }
     }
     const casesResult = await client.query(
-      'SELECT id FROM test_cases WHERE dataset_version_id = $1 ORDER BY created_at, name', [versionId]
+      'SELECT id FROM test_cases WHERE dataset_version_id = $1 ORDER BY position_index ASC, created_at, name', [versionId]
     );
     if (casesResult.rowCount === 0) {
       const error = new Error('Dataset version contains no test cases');
@@ -61,9 +62,208 @@ export async function createEvaluationRun({ datasetId, datasetVersionId, provide
   }
 }
 
+export async function createEvaluationCampaign({ datasetId, datasetVersionId, provider, model, systemPrompt, repeatCount }) {
+  const client = await pool.connect();
+  const campaignId = randomUUID();
+  try {
+    await client.query('BEGIN');
+    let versionId = datasetVersionId;
+    if (datasetId) {
+      const versionResult = await client.query(
+        'SELECT id FROM dataset_versions WHERE dataset_id = $1 ORDER BY version_number DESC LIMIT 1', [datasetId]
+      );
+      versionId = versionResult.rows[0]?.id;
+      if (!versionId) {
+        const error = new Error('Dataset was not found or has no versions');
+        error.statusCode = 404;
+        throw error;
+      }
+    } else {
+      const versionResult = await client.query('SELECT id FROM dataset_versions WHERE id = $1', [versionId]);
+      if (!versionResult.rows[0]) {
+        const error = new Error('Dataset version not found');
+        error.statusCode = 404;
+        throw error;
+      }
+    }
+
+    const casesResult = await client.query(
+      'SELECT id FROM test_cases WHERE dataset_version_id = $1 ORDER BY position_index ASC, created_at, name', [versionId]
+    );
+    if (casesResult.rowCount === 0) {
+      const error = new Error('Dataset version contains no test cases');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    await client.query(
+      `INSERT INTO evaluation_campaigns
+       (id, dataset_version_id, provider, model, system_prompt, repeat_count, status)
+       VALUES ($1,$2,$3,$4,$5,$6,'queued')`,
+      [campaignId, versionId, provider, model, systemPrompt, repeatCount]
+    );
+
+    for (let repetitionIndex = 1; repetitionIndex <= repeatCount; repetitionIndex += 1) {
+      const runId = randomUUID();
+      await client.query(
+        `INSERT INTO evaluation_runs
+         (id, dataset_version_id, provider, model, system_prompt, status, total_cases, campaign_id, repetition_index)
+         VALUES ($1,$2,$3,$4,$5,'queued',$6,$7,$8)`,
+        [runId, versionId, provider, model, systemPrompt, casesResult.rowCount, campaignId, repetitionIndex]
+      );
+      for (const row of casesResult.rows) {
+        await client.query(
+          `INSERT INTO evaluation_results(id, run_id, test_case_id, status)
+           VALUES ($1,$2,$3,'pending') ON CONFLICT (run_id, test_case_id) DO NOTHING`,
+          [randomUUID(), runId, row.id]
+        );
+      }
+      await client.query(
+        'INSERT INTO audit_events(id, run_id, event_type, details) VALUES ($1,$2,$3,$4)',
+        [randomUUID(), runId, 'evaluation.queued', JSON.stringify({ provider, model, totalCases: casesResult.rowCount, campaignId, repetitionIndex })]
+      );
+    }
+
+    await client.query('COMMIT');
+    return getEvaluationCampaignById(campaignId);
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getEvaluationCampaignState(campaignId) {
+  const { rows } = await pool.query('SELECT * FROM evaluation_campaigns WHERE id = $1', [campaignId]);
+  return rows[0] ?? null;
+}
+
+export async function getEvaluationCampaignRunIds(campaignId) {
+  const { rows } = await pool.query(
+    'SELECT id FROM evaluation_runs WHERE campaign_id = $1 ORDER BY repetition_index ASC', [campaignId]
+  );
+  return rows.map((row) => row.id);
+}
+
+export async function updateEvaluationCampaignStatus(campaignId, status, errorMessage = null) {
+  const times = status === 'running'
+    ? ', started_at = COALESCE(started_at, NOW())'
+    : ['completed', 'failed', 'cancelled'].includes(status) ? ', completed_at = NOW()' : '';
+  // Keep terminal states terminal if a duplicate/retried queue job races with
+  // cancellation or completion. Idempotent updates to the same state are safe.
+  await pool.query(
+    `UPDATE evaluation_campaigns SET status = $2, error_message = $3 ${times}
+     WHERE id = $1 AND (status = $2 OR (status IN ('queued','running') AND $2 IN ('running','completed','failed','cancelled')))`,
+    [campaignId, status, errorMessage]
+  );
+}
+
+export async function failEvaluationCampaign(campaignId, message) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `UPDATE evaluation_campaigns SET status='failed', error_message=$2, completed_at=NOW() WHERE id=$1 AND status IN ('queued','running')`,
+      [campaignId, message]
+    );
+    const runs = await client.query(
+      `UPDATE evaluation_runs SET status='failed', error_message=$2, completed_at=NOW()
+       WHERE campaign_id=$1 AND status IN ('queued','running') RETURNING id`, [campaignId, message]
+    );
+    for (const run of runs.rows) {
+      await client.query(
+        'INSERT INTO audit_events(id, run_id, event_type, details) VALUES ($1,$2,$3,$4)',
+        [randomUUID(), run.id, 'evaluation.failed', JSON.stringify({ message, campaignId })]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function cancelEvaluationCampaign(campaignId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `UPDATE evaluation_campaigns SET status='cancelled', completed_at=NOW()
+       WHERE id=$1 AND status IN ('queued','running')`, [campaignId]
+    );
+    const runs = await client.query(
+      `UPDATE evaluation_runs SET status='cancelled', completed_at=NOW()
+       WHERE campaign_id=$1 AND status IN ('queued','running') RETURNING id`, [campaignId]
+    );
+    for (const run of runs.rows) {
+      await client.query(
+        'INSERT INTO audit_events(id, run_id, event_type, details) VALUES ($1,$2,$3,$4)',
+        [randomUUID(), run.id, 'evaluation.cancelled', JSON.stringify({ campaignId })]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getEvaluationCampaignById(campaignId) {
+  const { rows: campaignRows } = await pool.query(
+    `SELECT c.*, v.version_number, d.id AS dataset_id, d.name AS dataset_name
+     FROM evaluation_campaigns c
+     JOIN dataset_versions v ON v.id = c.dataset_version_id
+     JOIN datasets d ON d.id = v.dataset_id
+     WHERE c.id = $1`, [campaignId]
+  );
+  const campaign = campaignRows[0];
+  if (!campaign) return null;
+
+  const { rows: runs } = await pool.query(
+    `SELECT r.*, c.repeat_count AS campaign_repeat_count, v.version_number, d.id AS dataset_id, d.name AS dataset_name,
+       model_summary.actual_model_names, model_summary.fallback_cases,
+       model_summary.model_response_cases, model_summary.provider_error_cases
+     FROM evaluation_runs r
+     JOIN dataset_versions v ON v.id = r.dataset_version_id
+     JOIN datasets d ON d.id = v.dataset_id
+     LEFT JOIN evaluation_campaigns c ON c.id = r.campaign_id
+     LEFT JOIN LATERAL (
+       SELECT
+         COALESCE(array_agg(DISTINCT model_name ORDER BY model_name) FILTER (WHERE model_name IS NOT NULL), ARRAY[]::TEXT[]) AS actual_model_names,
+         COUNT(*) FILTER (WHERE model_name IS NOT NULL)::int AS model_response_cases,
+         COUNT(*) FILTER (WHERE fallback_used)::int AS fallback_cases,
+         COUNT(*) FILTER (WHERE status = 'error' AND model_name IS NULL)::int AS provider_error_cases
+       FROM (
+         SELECT er.status,
+           CASE WHEN r.provider = 'mock' AND er.actual_output IS NOT NULL THEN r.model
+             ELSE COALESCE(er.actual_output #>> '{providerMetadata,actualModel}', er.actual_output #>> '{providerMetadata,modelVersion}', er.actual_output #>> '{providerMetadata,model}')
+           END AS model_name,
+           (er.actual_output #>> '{providerMetadata,fallbackUsed}') = 'true' AS fallback_used
+         FROM evaluation_results er WHERE er.run_id = r.id
+       ) detected_models
+     ) model_summary ON TRUE
+     WHERE r.campaign_id = $1 ORDER BY r.repetition_index ASC`, [campaignId]
+  );
+  const { rows: results } = await pool.query(
+    `SELECT er.run_id, r.repetition_index, r.provider, r.model, r.status AS run_status,
+            er.test_case_id, tc.name AS test_case_name, er.status, er.actual_output,
+            er.latency_ms, er.estimated_cost_usd
+     FROM evaluation_results er
+     JOIN evaluation_runs r ON r.id = er.run_id
+     JOIN test_cases tc ON tc.id = er.test_case_id
+     WHERE r.campaign_id = $1 ORDER BY r.repetition_index, tc.created_at, tc.name`, [campaignId]
+  );
+  return { ...campaign, runs, reliability: buildReliabilityReport({ campaign, runs, results }) };
+}
+
 export async function listEvaluations(limit = 50) {
   const { rows } = await pool.query(
-    `SELECT r.*, v.version_number, d.id AS dataset_id, d.name AS dataset_name,
+    `SELECT r.*, c.repeat_count AS campaign_repeat_count, v.version_number, d.id AS dataset_id, d.name AS dataset_name,
        model_summary.actual_model_names,
        model_summary.model_response_cases,
        model_summary.fallback_cases,
@@ -71,6 +271,7 @@ export async function listEvaluations(limit = 50) {
      FROM evaluation_runs r
      JOIN dataset_versions v ON v.id = r.dataset_version_id
      JOIN datasets d ON d.id = v.dataset_id
+     LEFT JOIN evaluation_campaigns c ON c.id = r.campaign_id
      LEFT JOIN LATERAL (
        SELECT
          COALESCE(array_agg(DISTINCT model_name ORDER BY model_name) FILTER (WHERE model_name IS NOT NULL), ARRAY[]::TEXT[]) AS actual_model_names,
@@ -98,10 +299,11 @@ export async function listEvaluations(limit = 50) {
 
 export async function getEvaluationById(runId) {
   const { rows } = await pool.query(
-    `SELECT r.*, v.version_number, d.id AS dataset_id, d.name AS dataset_name
+    `SELECT r.*, c.repeat_count AS campaign_repeat_count, v.version_number, d.id AS dataset_id, d.name AS dataset_name
      FROM evaluation_runs r
      JOIN dataset_versions v ON v.id = r.dataset_version_id
      JOIN datasets d ON d.id = v.dataset_id
+     LEFT JOIN evaluation_campaigns c ON c.id = r.campaign_id
      WHERE r.id = $1`, [runId]
   );
   return rows[0] ?? null;
@@ -203,11 +405,15 @@ export async function updateRunStatus(runId, status, errorMessage = null) {
   const times = status === 'running'
     ? ', started_at = COALESCE(started_at, NOW())'
     : ['completed', 'failed', 'cancelled'].includes(status) ? ', completed_at = NOW()' : '';
-  await pool.query(
-    `UPDATE evaluation_runs SET status = $2, error_message = $3 ${times} WHERE id = $1`,
+  const result = await pool.query(
+    `UPDATE evaluation_runs SET status = $2, error_message = $3 ${times}
+     WHERE id = $1 AND (status = $2 OR (status IN ('queued','running') AND $2 IN ('running','completed','failed','cancelled')))`,
     [runId, status, errorMessage]
   );
-  await addAuditEvent(runId, `evaluation.${status}`, errorMessage ? { message: errorMessage } : {});
+  if (result.rowCount > 0) {
+    await addAuditEvent(runId, `evaluation.${status}`, errorMessage ? { message: errorMessage } : {});
+  }
+  return result.rowCount > 0;
 }
 
 export async function addAuditEvent(runId, eventType, details = {}) {

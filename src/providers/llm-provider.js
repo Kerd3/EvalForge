@@ -152,7 +152,22 @@ export function parseRetryDelayMs(bodyText = '', retryAfterHeader = null, nowMs 
   return null;
 }
 
-async function fetchWithRetries(url, options, { maxAttempts = 2, minIntervalMs = 0 } = {}) {
+function isRequestTimeoutError(error) {
+  return error?.code === 'GEMINI_REQUEST_TIMEOUT'
+    || error?.name === 'TimeoutError'
+    || /operation was aborted due to timeout|request timed out|timed out while waiting for a response/i.test(String(error?.message ?? ''));
+}
+
+// Temporary Gemini service failures (including HTTP 503 high demand) should
+// move to the next configured model instead of retrying the same model under
+// the worker's shared per-request throttle. 408/500/502/503/504 are transient;
+// authentication and request-validation errors are intentionally excluded.
+function isGeminiTransientServiceError(error) {
+  return [408, 500, 502, 503, 504].includes(Number(error?.statusCode))
+    || error?.providerUnavailable === true;
+}
+
+async function fetchWithRetries(url, options, { maxAttempts = 2, minIntervalMs = 0, requestTimeoutMs = 45000 } = {}) {
   let lastError;
   // Do not keep a worker asleep for minutes/hours because of a provider quota
   // reset. Short request-rate delays may be retried once; long resets become a
@@ -162,7 +177,7 @@ async function fetchWithRetries(url, options, { maxAttempts = 2, minIntervalMs =
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       if (minIntervalMs > 0) await waitForGeminiRequestSlot(minIntervalMs);
-      const response = await fetch(url, { ...options, signal: AbortSignal.timeout(45000) });
+      const response = await fetch(url, { ...options, signal: AbortSignal.timeout(requestTimeoutMs) });
       if (response.ok) return response;
 
       const body = await response.text();
@@ -176,9 +191,10 @@ async function fetchWithRetries(url, options, { maxAttempts = 2, minIntervalMs =
       if (quotaExhausted) error.quotaExhausted = true;
 
       const transient = response.status === 408 || response.status === 429 || response.status >= 500;
+      const fallbackToAnotherModel = isGeminiTransientServiceError(error);
       const delayTooLong = retryDelayMs !== null && retryDelayMs > maxAutomaticRetryWaitMs;
       const quotaWithoutHint = quotaExhausted && retryDelayMs === null;
-      if (!transient || attempt === maxAttempts || delayTooLong || quotaWithoutHint) {
+      if (!transient || fallbackToAnotherModel || attempt === maxAttempts || delayTooLong || quotaWithoutHint) {
         if (delayTooLong || quotaWithoutHint) {
           error.retryDeferred = true;
           error.message += delayTooLong
@@ -194,10 +210,24 @@ async function fetchWithRetries(url, options, { maxAttempts = 2, minIntervalMs =
       await sleep(retryDelayMs ?? Math.min(30000, 1000 * (2 ** (attempt - 1))));
     } catch (error) {
       lastError = error;
+      // A timeout is passed to model-level fallback immediately instead of
+      // spending another full request timeout retrying the same slow model.
+      if (isRequestTimeoutError(error)) {
+        const timeoutError = new Error(`Gemini request timed out after ${requestTimeoutMs} ms.`);
+        timeoutError.name = 'TimeoutError';
+        timeoutError.code = 'GEMINI_REQUEST_TIMEOUT';
+        timeoutError.providerTimeout = true;
+        timeoutError.requestTimeoutMs = requestTimeoutMs;
+        timeoutError.cause = error;
+        throw timeoutError;
+      }
+      // Return 5xx/service-availability errors to model-level fallback now.
+      // Retrying the same model would incur another throttle interval first.
+      if (isGeminiTransientServiceError(error)) throw error;
       const nonRetryableHttpError = error.statusCode && error.statusCode < 500 && error.statusCode !== 408 && error.statusCode !== 429;
       if (attempt === maxAttempts || nonRetryableHttpError || error.retryDeferred) throw error;
       // HTTP failures have already waited using the response's retry hint.
-      // Network/timeout exceptions receive bounded exponential backoff.
+      // Other network failures receive bounded exponential backoff.
       if (!error.statusCode) await sleep(Math.min(30000, 1000 * (2 ** (attempt - 1))));
     }
   }
@@ -271,7 +301,7 @@ function createGeminiProviderForModel(model) {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(body)
-      }, { minIntervalMs: env.GEMINI_MIN_REQUEST_INTERVAL_MS });
+      }, { minIntervalMs: env.GEMINI_MIN_REQUEST_INTERVAL_MS, requestTimeoutMs: env.GEMINI_REQUEST_TIMEOUT_MS });
       const payload = await response.json();
       return mapGeminiResponse(payload);
     },
@@ -305,6 +335,7 @@ function createGeminiProviderForModel(model) {
 // Quota cooldowns are shared by provider instances inside this worker process.
 // A multi-worker deployment should move this registry into Redis for cross-process coordination.
 const geminiModelCooldownUntil = new Map();
+const geminiModelCooldownReason = new Map();
 
 export function buildGeminiModelChain(primaryModel, fallbackModelsText = '') {
   const models = [
@@ -316,6 +347,10 @@ export function buildGeminiModelChain(primaryModel, fallbackModelsText = '') {
 
 function isGeminiQuotaOrRateLimitError(error) {
   return error?.statusCode === 429 || error?.quotaExhausted === true;
+}
+
+function isGeminiTimeoutError(error) {
+  return error?.providerTimeout === true || error?.code === 'GEMINI_REQUEST_TIMEOUT' || isRequestTimeoutError(error);
 }
 
 export function getGeminiCooldownMs(error, defaultCooldownMs = 60000) {
@@ -332,18 +367,21 @@ export function getGeminiCooldownMs(error, defaultCooldownMs = 60000) {
 }
 
 /**
- * Try configured Gemini models in order. Automatically switch only when a
- * model is rate-limited/quota-exhausted; don't disguise auth/config/validation
- * errors by silently moving to a different model. `cooldowns` is injectable so
- * fallback behavior can be tested without making live provider requests.
+ * Try configured Gemini models in order. Switch for quota/rate-limit
+ * failures, request timeouts, and temporary HTTP service errors (such as 503).
+ * Auth/config/validation errors are surfaced rather than hidden by another
+ * model. `cooldowns` is injectable for tests.
  */
 export async function generateWithGeminiFallback({
   models,
   generateForModel,
   args,
   cooldowns = geminiModelCooldownUntil,
+  cooldownReasons = new Map(),
   now = () => Date.now(),
-  defaultCooldownMs = 60000
+  defaultCooldownMs = 60000,
+  timeoutCooldownMs = 60000,
+  unavailableCooldownMs = 30000
 }) {
   const candidates = [...new Set((models ?? []).filter((item) => typeof item === 'string' && item.length > 0))];
   if (!candidates.length) throw new Error('No Gemini model is configured. Set DEFAULT_GEMINI_MODEL.');
@@ -355,19 +393,19 @@ export async function generateWithGeminiFallback({
   for (const candidate of candidates) {
     const cooldownUntil = cooldowns.get(candidate) ?? 0;
     if (cooldownUntil > now()) {
-      skipped.push({ model: candidate, cooldownUntil });
+      skipped.push({ model: candidate, cooldownUntil, reason: cooldownReasons.get(candidate) ?? 'quota/rate-limit' });
       continue;
     }
 
     try {
       const response = await generateForModel(candidate, args);
-      const priorModels = [
-        ...skipped.map((item) => item.model),
-        ...failures.map((item) => item.model)
-      ];
       const fallbackUsed = candidate !== requestedModel;
+      const priorDetails = [
+        ...failures.map(({ model, error }) => `${model}: ${error.message}`),
+        ...skipped.map(({ model, reason, cooldownUntil }) => `${model}: ${reason} cooldown until ${new Date(cooldownUntil).toISOString()}`)
+      ];
       const fallbackReason = fallbackUsed
-        ? `Switched from ${requestedModel} after quota/rate-limit protection skipped or rejected: ${[...new Set(priorModels)].join(', ')}.`
+        ? `Switched from ${requestedModel} because a configured model timed out, was rate-limited/quota-exhausted, or temporarily unavailable. ${priorDetails.join(' | ')}`
         : null;
       return {
         ...response,
@@ -380,11 +418,20 @@ export async function generateWithGeminiFallback({
         }
       };
     } catch (error) {
-      if (!isGeminiQuotaOrRateLimitError(error)) throw error;
-      const cooldownMs = getGeminiCooldownMs(error, defaultCooldownMs);
+      const timedOut = isGeminiTimeoutError(error);
+      const quotaLimited = isGeminiQuotaOrRateLimitError(error);
+      const serviceUnavailable = isGeminiTransientServiceError(error);
+      if (!timedOut && !quotaLimited && !serviceUnavailable) throw error;
+      const reason = timedOut ? 'timeout' : quotaLimited ? 'quota/rate-limit' : 'provider-unavailable';
+      const cooldownMs = timedOut
+        ? Math.max(1000, timeoutCooldownMs)
+        : quotaLimited
+          ? getGeminiCooldownMs(error, defaultCooldownMs)
+          : getGeminiCooldownMs(error, unavailableCooldownMs);
       const until = now() + cooldownMs;
       cooldowns.set(candidate, until);
-      failures.push({ model: candidate, error, cooldownUntil: until });
+      cooldownReasons.set(candidate, reason);
+      failures.push({ model: candidate, error, cooldownUntil: until, reason });
     }
   }
 
@@ -394,14 +441,33 @@ export async function generateWithGeminiFallback({
   const retryAfterMs = cooldownTimes.length ? Math.max(0, Math.min(...cooldownTimes) - now()) : defaultCooldownMs;
   const details = [
     ...failures.map(({ model: name, error }) => `${name}: ${String(error.message).slice(0, 180)}`),
-    ...skipped.map(({ model: name, cooldownUntil }) => `${name}: in cooldown until ${new Date(cooldownUntil).toISOString()}`)
+    ...skipped.map(({ model: name, cooldownUntil, reason }) => `${name}: ${reason} cooldown until ${new Date(cooldownUntil).toISOString()}`)
   ];
-  const error = new Error(
-    `All configured Gemini models are currently rate-limited or quota-exhausted. ${details.join(' | ')}. ` +
-    `Earliest retry is in approximately ${Math.ceil(retryAfterMs / 1000)} seconds.`
-  );
-  error.statusCode = 429;
-  error.quotaExhausted = true;
+  const allReasons = [...failures.map((item) => item.reason), ...skipped.map((item) => item.reason)];
+  const allUnavailableFromTimeout = allReasons.length > 0 && allReasons.every((reason) => reason === 'timeout');
+  const allUnavailableFromQuota = allReasons.length > 0 && allReasons.every((reason) => reason === 'quota/rate-limit');
+  const allUnavailableFromService = allReasons.length > 0 && allReasons.every((reason) => reason === 'provider-unavailable');
+  let finalMessage;
+  if (allUnavailableFromTimeout) {
+    finalMessage = `All configured Gemini models timed out while waiting for a response. ${details.join(' | ')}. ` +
+      `The earliest timeout cooldown expires in approximately ${Math.ceil(retryAfterMs / 1000)} seconds.`;
+  } else if (allUnavailableFromQuota) {
+    finalMessage = `All configured Gemini models are currently rate-limited, quota-exhausted, or in cooldown. ${details.join(' | ')}. ` +
+      `Earliest retry is in approximately ${Math.ceil(retryAfterMs / 1000)} seconds.`;
+  } else if (allUnavailableFromService) {
+    finalMessage = `All configured Gemini models returned temporary service-availability errors (such as HTTP 503). ${details.join(' | ')}. ` +
+      `The provider may be experiencing high demand. Earliest retry is in approximately ${Math.ceil(retryAfterMs / 1000)} seconds.`;
+  } else {
+    finalMessage = `No configured Gemini model could return a response because of timeout, quota, or temporary availability errors. ${details.join(' | ')}. ` +
+      `Earliest retry is in approximately ${Math.ceil(retryAfterMs / 1000)} seconds.`;
+  }
+  const error = new Error(finalMessage);
+  error.statusCode = allUnavailableFromTimeout ? 504 : allUnavailableFromQuota ? 429 : 503;
+  error.quotaExhausted = allUnavailableFromQuota;
+  error.providerTimeout = allUnavailableFromTimeout;
+  error.providerUnavailable = !allUnavailableFromTimeout && !allUnavailableFromQuota;
+  error.code = allUnavailableFromTimeout ? 'GEMINI_REQUEST_TIMEOUT'
+    : allUnavailableFromQuota ? 'GEMINI_MODELS_RATE_LIMITED' : 'GEMINI_MODELS_UNAVAILABLE';
   error.retryDeferred = true;
   error.retryAfterMs = retryAfterMs;
   error.modelErrors = details;
@@ -420,6 +486,9 @@ function createGeminiProvider(model) {
         models: modelChain,
         args,
         defaultCooldownMs: env.GEMINI_DEFAULT_QUOTA_COOLDOWN_MS,
+        timeoutCooldownMs: env.GEMINI_DEFAULT_TIMEOUT_COOLDOWN_MS,
+        unavailableCooldownMs: env.GEMINI_DEFAULT_UNAVAILABLE_COOLDOWN_MS,
+        cooldownReasons: geminiModelCooldownReason,
         generateForModel: async (candidate, requestArgs) => {
           if (candidate === primaryModel) return primaryProvider.generate(requestArgs);
           return createGeminiProviderForModel(candidate).generate(requestArgs);

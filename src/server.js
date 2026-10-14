@@ -1,14 +1,17 @@
 import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { pool, closePool } from './db/pool.js';
-import { evaluationQueue, enqueueEvaluation, closeEvaluationQueue } from './queues/evaluation.queue.js';
+import { evaluationQueue, enqueueEvaluation, enqueueEvaluationCampaign, closeEvaluationQueue } from './queues/evaluation.queue.js';
 import { datasetService } from './services/dataset.service.js';
 import { createEvaluationService } from './services/evaluation.service.js';
+import { createEvaluationCampaignService } from './services/evaluation-campaign.service.js';
 
 const evaluationService = createEvaluationService({ enqueue: enqueueEvaluation });
+const campaignService = createEvaluationCampaignService({ enqueue: enqueueEvaluationCampaign });
 const app = createApp({
   datasetService,
   evaluationService,
+  campaignService,
   healthCheck: async () => {
     await pool.query('SELECT 1');
     const client = await evaluationQueue.client;

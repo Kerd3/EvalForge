@@ -57,6 +57,7 @@
             <label for="dataset-select">Evaluation dataset <span class="required-mark">*</span></label>
             <select id="dataset-select" required><option value="">Loading datasets…</option></select>
             <div class="field-row"><div class="field-grow"><label for="provider-select">Provider</label><select id="provider-select"><option value="mock">Mock provider — no API key</option><option value="gemini">Google Gemini API</option><option value="openai">OpenAI API</option></select></div><div class="field-grow"><label for="model-input">Model label</label><input id="model-input" type="text" value="mock-v1" maxlength="150" placeholder="gemini-3.8-flash"></div></div>
+            <div class="field-grow"><label for="repeat-count">Repeated runs <span class="optional-label">RELIABILITY</span></label><input id="repeat-count" type="number" min="1" max="10" step="1" value="1" inputmode="numeric" aria-describedby="repeat-count-help"><small id="repeat-count-help" class="field-help">Set to 1 for a normal evaluation. Choose 2–10 to measure run-to-run variability. Repeats use the same dataset version and settings. Live providers repeat API calls and may increase usage/cost.</small></div>
             <label for="system-prompt">System prompt <span class="optional-label">OPTIONAL</span></label>
             <textarea id="system-prompt" rows="4" maxlength="12000">You are a careful customer-support assistant. Follow the instructions, use tools when needed, and do not invent facts.</textarea>
             <div class="provider-note" id="provider-note"><span class="note-icon">ⓘ</span><span>Mock mode uses saved fixtures for a repeatable run. Add a Gemini API key to <code>.env</code> to evaluate live model responses.</span></div>
@@ -86,14 +87,25 @@
         <div id="result-inspection" class="result-inspection" hidden></div>
       </section>
 
+      <section class="panel campaign-panel" id="campaign-detail-panel" hidden>
+        <div class="panel-heading"><div><div class="section-kicker">REPEATED-RUN ANALYSIS</div><h2 id="campaign-detail-title">Reliability campaign</h2><p class="panel-description">Run-to-run variation across repeated evaluations using the same dataset version and configuration.</p></div><div class="detail-actions"><button class="button button-secondary button-small" id="cancel-campaign-button" hidden>Cancel campaign</button><button class="icon-button" id="close-campaign-button" aria-label="Close campaign analysis">×</button></div></div>
+        <div id="campaign-detail-summary" class="detail-summary campaign-summary"></div>
+        <p id="campaign-interpretation" class="campaign-note"></p>
+        <div class="campaign-section-heading"><h3>Run-by-run results</h3><span id="campaign-run-count" class="count-chip">0 repetitions</span></div>
+        <div class="table-wrap"><table class="data-table campaign-table"><thead><tr><th>REPEAT</th><th>STATUS</th><th>PASS RATE*</th><th>PASS / FAIL / ERROR</th><th>AVG LATENCY</th><th>EST. COST</th><th>ACTUAL MODELS</th><th></th></tr></thead><tbody id="campaign-runs-body"><tr><td colspan="8" class="empty-cell">Waiting for repetitions…</td></tr></tbody></table></div>
+        <p class="campaign-footnote">*Pass rate = passed / (passed + failed). Provider errors are reported separately and excluded from the pass-rate denominator.</p>
+        <div class="campaign-section-heading"><h3>Per-case consistency</h3><span class="count-chip">Across repeats</span></div>
+        <div class="table-wrap"><table class="data-table campaign-table"><thead><tr><th>TEST CASE</th><th>PASS RATE</th><th>PASS / FAIL / ERROR</th><th>CONSISTENCY</th><th>ACTUAL MODEL(S)</th></tr></thead><tbody id="campaign-cases-body"><tr><td colspan="5" class="empty-cell">No completed repetitions yet.</td></tr></tbody></table></div>
+      </section>
+
       <section class="panel datasets-panel" id="datasets">
         <div class="panel-heading"><div><div class="section-kicker">TEST COLLECTIONS</div><h2>Datasets</h2></div><span class="count-chip" id="dataset-count">0 datasets</span></div>
         <div class="dataset-grid" id="dataset-grid"><div class="empty-state">Loading datasets…</div></div>
       </section>
 
       <section class="panel import-panel" id="import-dataset">
-        <div class="panel-heading"><div><div class="section-kicker">BRING YOUR OWN TESTS</div><h2>Import a dataset</h2></div><span class="panel-number">JSON</span></div>
-        <p class="panel-description">Create a versioned dataset by pasting test cases. Use the example to see supported grading rules.</p>
+        <div class="panel-heading"><div><div class="section-kicker">BRING YOUR OWN TESTS</div><h2 id="import-dataset-title">Import a dataset</h2></div><span class="panel-number">JSON</span></div>
+        <p class="panel-description" id="dataset-form-description">Create a versioned dataset by pasting test cases. Use the example to see supported grading rules.</p>
         <details class="json-example"><summary>View example JSON format</summary><pre><code>{
   "name": "My AI agent tests",
   "description": "Smoke tests for my agent",
@@ -113,7 +125,7 @@
         <form id="import-form" class="stack-form">
           <label for="dataset-json">Dataset JSON <span class="required-mark">*</span></label>
           <textarea id="dataset-json" class="json-input" rows="9" spellcheck="false" placeholder="Paste dataset JSON here…" required></textarea>
-          <div class="form-actions"><button class="button button-primary" type="submit" id="import-submit">＋ Create dataset</button><button class="button button-secondary" type="button" id="load-example-button">Load example</button></div>
+          <div class="form-actions"><button class="button button-primary" type="submit" id="import-submit">＋ Create dataset</button><button class="button button-secondary" type="button" id="load-example-button">Load example</button><button class="button button-secondary" type="button" id="cancel-dataset-edit-button" hidden>Cancel edit</button></div>
           <div class="form-message" id="import-form-message" role="status"></div>
         </form>
       </section>

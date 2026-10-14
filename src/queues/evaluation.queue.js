@@ -19,6 +19,10 @@ export async function enqueueEvaluation(runId) {
   return evaluationQueue.add('evaluate-run', { runId }, { jobId: `run-${runId}` });
 }
 
+export async function enqueueEvaluationCampaign(campaignId) {
+  return evaluationQueue.add('evaluate-campaign', { campaignId }, { jobId: `campaign-${campaignId}` });
+}
+
 export async function closeEvaluationQueue() {
   await evaluationQueue.close();
   await queueConnection.quit();

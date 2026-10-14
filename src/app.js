@@ -5,11 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { createDatasetsRouter } from './routes/datasets.routes.js';
 import { createEvaluationsRouter } from './routes/evaluations.routes.js';
+import { createEvaluationCampaignsRouter } from './routes/evaluation-campaigns.routes.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-export function createApp({ datasetService, evaluationService, healthCheck = async () => ({ status: 'ok' }) }) {
+export function createApp({ datasetService, evaluationService, campaignService, healthCheck = async () => ({ status: 'ok' }) }) {
   const app = express();
   app.disable('x-powered-by');
   app.use(helmet({ contentSecurityPolicy: false }));
@@ -30,6 +31,7 @@ export function createApp({ datasetService, evaluationService, healthCheck = asy
   });
   app.use('/api/datasets', createDatasetsRouter({ datasetService }));
   app.use('/api/evaluations', createEvaluationsRouter({ evaluationService }));
+  if (campaignService) app.use('/api/evaluation-campaigns', createEvaluationCampaignsRouter({ campaignService }));
   app.use(express.static(resolve(here, '../public')));
   app.use(notFoundHandler);
   app.use(errorHandler);
