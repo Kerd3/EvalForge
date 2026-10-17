@@ -1,0 +1,252 @@
+{
+  "name": "EvalForge Agent Trace Benchmark",
+  "description": "Four deterministic RAG and agent-trace cases covering evidence grounding, required retrieval, citation support, tool arguments, and consistency between intermediate steps and the final answer. Mock outputs are expected to pass. Labeled negative golden examples exercise grader calibration. Synthetic examples only.",
+  "test_cases": [
+    {
+      "name": "Ground the damage deadline in retrieved evidence",
+      "input": {
+        "message": "How soon must I report a damaged delivery?",
+        "context": "Synthetic policy: damaged deliveries must be reported within 7 calendar days of delivery.",
+        "mock_response": {
+          "content": "Report the damaged delivery within 7 calendar days of delivery.",
+          "toolCalls": [],
+          "agentTrace": {
+            "schemaVersion": "evalforge.agent-trace/v1",
+            "retrievalResults": [
+              { "evidenceId": "policy/damage-window", "content": "Damaged deliveries must be reported within 7 calendar days of delivery.", "rank": 1, "source": "synthetic-policy.md#damage-window" }
+            ],
+            "citations": [
+              { "evidenceId": "policy/damage-window", "quote": "within 7 calendar days of delivery" }
+            ],
+            "proposedToolCalls": [],
+            "executedToolResults": [],
+            "intermediateSteps": [
+              { "stepId": "step-1", "content": "The retrieved policy gives a damage-reporting window.", "conclusion": "within 7 calendar days of delivery", "evidenceIds": ["policy/damage-window"] }
+            ]
+          }
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [],
+      "forbidden_keywords": [],
+      "required_tools": [],
+      "forbidden_tools": [],
+      "tools": [],
+      "grading_rules": {
+        "traceRules": {
+          "requiredEvidenceIds": ["policy/damage-window"],
+          "validateCitations": true,
+          "evidenceClaims": [
+            { "claim": "within 7 calendar days of delivery", "evidenceId": "policy/damage-window" }
+          ],
+          "stepConsistency": {
+            "requireValidEvidenceIds": true,
+            "requireConclusionsInFinalAnswer": true
+          }
+        }
+      },
+      "golden_examples": [
+        {
+          "label": "correct",
+          "response": {
+            "content": "Report the damaged delivery within 7 calendar days of delivery.",
+            "toolCalls": [],
+            "agentTrace": {
+              "schemaVersion": "evalforge.agent-trace/v1",
+              "retrievalResults": [{ "evidenceId": "policy/damage-window", "content": "Damaged deliveries must be reported within 7 calendar days of delivery." }],
+              "citations": [{ "evidenceId": "policy/damage-window", "quote": "within 7 calendar days of delivery" }],
+              "proposedToolCalls": [], "executedToolResults": [],
+              "intermediateSteps": [{ "stepId": "step-1", "content": "The policy gives a reporting window.", "conclusion": "within 7 calendar days of delivery", "evidenceIds": ["policy/damage-window"] }]
+            }
+          },
+          "expected_passed": true,
+          "rationale": "The answer's required claim is present in the cited retrieval result and the recorded step conclusion is preserved in the final answer."
+        },
+        {
+          "label": "adversarial",
+          "response": {
+            "content": "Report the damaged delivery within 48 hours.",
+            "toolCalls": [],
+            "agentTrace": {
+              "schemaVersion": "evalforge.agent-trace/v1",
+              "retrievalResults": [{ "evidenceId": "policy/damage-window", "content": "Damaged deliveries must be reported within 7 calendar days of delivery." }],
+              "citations": [{ "evidenceId": "policy/damage-window", "quote": "within 48 hours" }],
+              "proposedToolCalls": [], "executedToolResults": [],
+              "intermediateSteps": [{ "stepId": "step-1", "content": "The answer says 48 hours.", "conclusion": "within 48 hours", "evidenceIds": ["policy/damage-window"] }]
+            }
+          },
+          "expected_passed": false,
+          "rationale": "The quoted claim is not supported by the cited evidence and does not match the policy-grounded claim."
+        }
+      ]
+    },
+    {
+      "name": "Require the refund policy evidence to be retrieved",
+      "input": {
+        "message": "Is a refund guaranteed?",
+        "context": "Synthetic policy: refund eligibility is reviewed case by case and refunds are not guaranteed.",
+        "mock_response": {
+          "content": "A refund is not guaranteed; eligibility is reviewed case by case.",
+          "toolCalls": [],
+          "agentTrace": {
+            "schemaVersion": "evalforge.agent-trace/v1",
+            "retrievalResults": [{ "evidenceId": "policy/refund-review", "content": "Refund eligibility is reviewed case by case. A refund is not guaranteed.", "rank": 1 }],
+            "citations": [{ "evidenceId": "policy/refund-review", "quote": "A refund is not guaranteed" }],
+            "proposedToolCalls": [], "executedToolResults": [], "intermediateSteps": []
+          }
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [], "forbidden_keywords": [], "required_tools": [], "forbidden_tools": [], "tools": [],
+      "grading_rules": {
+        "traceRules": {
+          "requiredEvidenceIds": ["policy/refund-review"],
+          "validateCitations": true
+        }
+      },
+      "golden_examples": [
+        {
+          "label": "correct",
+          "response": {
+            "content": "A refund is not guaranteed; eligibility is reviewed case by case.", "toolCalls": [],
+            "agentTrace": {
+              "schemaVersion": "evalforge.agent-trace/v1",
+              "retrievalResults": [{ "evidenceId": "policy/refund-review", "content": "Refund eligibility is reviewed case by case. A refund is not guaranteed." }],
+              "citations": [{ "evidenceId": "policy/refund-review", "quote": "A refund is not guaranteed" }],
+              "proposedToolCalls": [], "executedToolResults": [], "intermediateSteps": []
+            }
+          },
+          "expected_passed": true,
+          "rationale": "The required policy record was retrieved and the citation quote occurs in it."
+        },
+        {
+          "label": "incorrect",
+          "response": {
+            "content": "A refund is not guaranteed; eligibility is reviewed case by case.", "toolCalls": [],
+            "agentTrace": {
+              "schemaVersion": "evalforge.agent-trace/v1",
+              "retrievalResults": [{ "evidenceId": "policy/returns", "content": "Eligible items may be returned within 30 days." }],
+              "citations": [{ "evidenceId": "policy/returns", "quote": "Eligible items may be returned within 30 days" }],
+              "proposedToolCalls": [], "executedToolResults": [], "intermediateSteps": []
+            }
+          },
+          "expected_passed": false,
+          "rationale": "The required refund-policy evidence was not retrieved."
+        }
+      ]
+    },
+    {
+      "name": "Select the order lookup tool with the expected arguments",
+      "input": {
+        "message": "Check order ORD-1001 before describing its delivery status.",
+        "mock_response": {
+          "content": "I checked order ORD-1001.",
+          "toolCalls": [],
+          "agentTrace": {
+            "schemaVersion": "evalforge.agent-trace/v1",
+            "retrievalResults": [], "citations": [],
+            "proposedToolCalls": [{ "id": "call-1", "name": "lookup_order", "arguments": { "orderId": "ORD-1001", "includeItems": true } }],
+            "executedToolResults": [{ "callId": "call-1", "name": "lookup_order", "arguments": { "orderId": "ORD-1001", "includeItems": true }, "result": { "status": "in_transit" } }],
+            "intermediateSteps": []
+          }
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [], "forbidden_keywords": [], "required_tools": [], "forbidden_tools": [],
+      "tools": [{ "name": "lookup_order", "description": "Read an order by its ID.", "parameters": { "type": "object", "properties": { "orderId": { "type": "string" }, "includeItems": { "type": "boolean" } }, "required": ["orderId", "includeItems"] } }],
+      "grading_rules": {
+        "traceRules": {
+          "toolCallExpectations": [
+            { "name": "lookup_order", "arguments": { "orderId": "ORD-1001", "includeItems": true }, "argumentMatch": "exact" }
+          ]
+        }
+      },
+      "golden_examples": [
+        {
+          "label": "correct",
+          "response": {
+            "content": "I checked order ORD-1001.", "toolCalls": [],
+            "agentTrace": {
+              "schemaVersion": "evalforge.agent-trace/v1", "retrievalResults": [], "citations": [],
+              "proposedToolCalls": [{ "name": "lookup_order", "arguments": { "orderId": "ORD-1001", "includeItems": true } }],
+              "executedToolResults": [], "intermediateSteps": []
+            }
+          },
+          "expected_passed": true,
+          "rationale": "The proposed tool and JSON arguments exactly match the expected order lookup."
+        },
+        {
+          "label": "incorrect",
+          "response": {
+            "content": "I checked order ORD-1001.", "toolCalls": [],
+            "agentTrace": {
+              "schemaVersion": "evalforge.agent-trace/v1", "retrievalResults": [], "citations": [],
+              "proposedToolCalls": [{ "name": "lookup_order", "arguments": { "orderId": "ORD-1002", "includeItems": true } }],
+              "executedToolResults": [], "intermediateSteps": []
+            }
+          },
+          "expected_passed": false,
+          "rationale": "The proposed call targets a different order ID."
+        }
+      ]
+    },
+    {
+      "name": "Keep the final answer consistent with the evidence-backed step",
+      "input": {
+        "message": "Who pays return shipping under this sample policy?",
+        "context": "Synthetic policy: the customer pays return shipping.",
+        "mock_response": {
+          "content": "The customer pays return shipping.", "toolCalls": [],
+          "agentTrace": {
+            "schemaVersion": "evalforge.agent-trace/v1",
+            "retrievalResults": [{ "evidenceId": "policy/shipping", "content": "The customer pays return shipping.", "rank": 1 }],
+            "citations": [{ "evidenceId": "policy/shipping", "quote": "The customer pays return shipping" }],
+            "proposedToolCalls": [], "executedToolResults": [],
+            "intermediateSteps": [{ "stepId": "step-1", "content": "The shipping policy names the responsible party.", "conclusion": "The customer pays return shipping", "evidenceIds": ["policy/shipping"] }]
+          }
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [], "forbidden_keywords": [], "required_tools": [], "forbidden_tools": [], "tools": [],
+      "grading_rules": {
+        "traceRules": {
+          "validateCitations": true,
+          "evidenceClaims": [{ "claim": "The customer pays return shipping", "evidenceId": "policy/shipping" }],
+          "stepConsistency": { "requireValidEvidenceIds": true, "requireConclusionsInFinalAnswer": true }
+        }
+      },
+      "golden_examples": [
+        {
+          "label": "correct",
+          "response": {
+            "content": "The customer pays return shipping.", "toolCalls": [],
+            "agentTrace": {
+              "schemaVersion": "evalforge.agent-trace/v1",
+              "retrievalResults": [{ "evidenceId": "policy/shipping", "content": "The customer pays return shipping." }],
+              "citations": [{ "evidenceId": "policy/shipping", "quote": "The customer pays return shipping" }],
+              "proposedToolCalls": [], "executedToolResults": [],
+              "intermediateSteps": [{ "stepId": "step-1", "content": "The policy identifies the payer.", "conclusion": "The customer pays return shipping", "evidenceIds": ["policy/shipping"] }]
+            }
+          },
+          "expected_passed": true,
+          "rationale": "The final answer, citation, retrieved text, and intermediate conclusion agree."
+        },
+        {
+          "label": "conflicting",
+          "response": {
+            "content": "The seller pays return shipping.", "toolCalls": [],
+            "agentTrace": {
+              "schemaVersion": "evalforge.agent-trace/v1",
+              "retrievalResults": [{ "evidenceId": "policy/shipping", "content": "The customer pays return shipping." }],
+              "citations": [{ "evidenceId": "policy/shipping", "quote": "The customer pays return shipping" }],
+              "proposedToolCalls": [], "executedToolResults": [],
+              "intermediateSteps": [{ "stepId": "step-1", "content": "The policy identifies the payer.", "conclusion": "The customer pays return shipping", "evidenceIds": ["policy/shipping"] }]
+            }
+          },
+          "expected_passed": false,
+          "rationale": "The final answer contradicts the evidence-backed intermediate conclusion and does not contain the required claim."
+        }
+      ]
+    }
+  ]
+}

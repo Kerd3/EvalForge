@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { createEvaluationSchema, compareSchema } from '../validators/evaluation.schema.js';
+import { createEvaluationSchema, compareSchema, createRecordedEvaluationSchema } from '../validators/evaluation.schema.js';
 import { HttpError } from '../middleware/error-handler.js';
 
 export function createEvaluationsRouter({ evaluationService }) {
@@ -22,6 +22,15 @@ export function createEvaluationsRouter({ evaluationService }) {
       if (!parsed.success) throw new HttpError(400, 'Invalid evaluation payload', parsed.error.issues);
       const run = await evaluationService.create(parsed.data, req.user.id);
       res.status(202).json({ data: run });
+    } catch (error) { next(error); }
+  });
+
+  router.post('/recorded', async (req, res, next) => {
+    try {
+      const parsed = createRecordedEvaluationSchema.safeParse(req.body);
+      if (!parsed.success) throw new HttpError(400, 'Invalid recorded evaluation payload', parsed.error.issues);
+      const run = await evaluationService.createRecorded(parsed.data, req.user.id);
+      res.status(201).json({ data: run });
     } catch (error) { next(error); }
   });
 

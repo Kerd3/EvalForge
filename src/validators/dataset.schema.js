@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { agentTraceSchema, traceGradingRulesSchema } from './agent-trace.schema.js';
 
 const toolSchema = z.object({
   name: z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/),
@@ -15,7 +16,8 @@ const goldenExampleSchema = z.object({
   label: z.enum(['correct', 'incorrect', 'ambiguous', 'conflicting', 'adversarial']),
   response: z.object({
     content: z.string().max(20000).default(''),
-    toolCalls: z.array(goldenToolCallSchema).max(30).default([])
+    toolCalls: z.array(goldenToolCallSchema).max(30).default([]),
+    agentTrace: agentTraceSchema.optional()
   }).strict(),
   expected_passed: z.boolean(),
   rationale: z.string().max(1000).optional()
@@ -39,7 +41,8 @@ const testCaseSchema = z.object({
     judgeRubric: z.string().max(3000).optional(),
     semanticEquivalents: z.array(z.string().min(1).max(20000)).max(25).optional(),
     requiredKeywords: z.array(z.string().min(1).max(200)).max(50).optional(),
-    forbiddenKeywords: z.array(z.string().min(1).max(200)).max(50).optional()
+    forbiddenKeywords: z.array(z.string().min(1).max(200)).max(50).optional(),
+    traceRules: traceGradingRulesSchema.optional()
   }).default({}),
   // These examples are immutable with their dataset version and are used to
   // measure deterministic-grader calibration, including false positives/negatives.

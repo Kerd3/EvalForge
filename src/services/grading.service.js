@@ -1,3 +1,5 @@
+import { validateAgentTrace } from './agent-trace.service.js';
+
 function asText(value) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value;
@@ -10,6 +12,121 @@ function normalize(value) {
 
 function makeCheck(name, passed, details, score = passed ? 1 : 0, metadata = {}) {
   return { name, passed, score, details, ...metadata };
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalJson(value[key])]));
+  }
+  return value;
+}
+
+function deepEqualJson(left, right) {
+  return JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right));
+}
+
+function includesJsonSubset(actual, expected) {
+  if (expected && typeof expected === 'object' && !Array.isArray(expected)) {
+    if (!actual || typeof actual !== 'object' || Array.isArray(actual)) return false;
+    return Object.entries(expected).every(([key, value]) =>
+      Object.hasOwn(actual, key) && includesJsonSubset(actual[key], value));
+  }
+  if (Array.isArray(expected)) {
+    return Array.isArray(actual) && expected.length === actual.length
+      && expected.every((value, index) => includesJsonSubset(actual[index], value));
+  }
+  return Object.is(actual, expected);
+}
+
+function gradeTraceRules(response, rules) {
+  const hasTrace = response?.agentTrace !== undefined && response?.agentTrace !== null;
+  if ((!rules || typeof rules !== 'object') && !hasTrace) return [];
+  const validation = validateAgentTrace(response?.agentTrace);
+  const trace = validation.success ? validation.data : null;
+  const graders = [makeCheck('agent_trace_contract', Boolean(trace), trace
+    ? 'Agent trace matches evalforge.agent-trace/v1.'
+    : validation.error)];
+  if (!rules || typeof rules !== 'object') return graders;
+  const evidenceById = new Map((trace?.retrievalResults ?? []).map((item) => [item.evidenceId, item]));
+  const citedIds = new Set((trace?.citations ?? []).map((item) => item.evidenceId));
+  const content = typeof response?.content === 'string' ? response.content : '';
+
+  if (Array.isArray(rules.requiredEvidenceIds)) {
+    const missing = rules.requiredEvidenceIds.filter((id) => !evidenceById.has(id));
+    graders.push(makeCheck('missing_retrieval_evidence', Boolean(trace) && missing.length === 0,
+      !trace ? 'Cannot check retrieval evidence because the agent trace is missing or invalid.'
+        : missing.length ? `Required evidence was not retrieved: ${missing.join(', ')}` : 'All required evidence IDs were retrieved.'));
+  }
+
+  if (rules.validateCitations === true) {
+    const invalid = (trace?.citations ?? []).filter((citation) => {
+      const evidence = evidenceById.get(citation.evidenceId);
+      return !evidence || (citation.quote !== undefined && !containsPhrase(evidence.content, citation.quote));
+    });
+    graders.push(makeCheck('citation_validity', Boolean(trace) && invalid.length === 0,
+      !trace ? 'Cannot validate citations because the agent trace is missing or invalid.'
+        : invalid.length
+          ? `Citations do not match retrieved evidence: ${invalid.map((item) => item.evidenceId).join(', ')}`
+          : 'Every citation points to retrieved evidence; supplied quotes occur in that evidence.'));
+  }
+
+  if (Array.isArray(rules.evidenceClaims)) {
+    const unsupported = rules.evidenceClaims.filter((item) => {
+      const evidence = evidenceById.get(item.evidenceId);
+      return !evidence || !citedIds.has(item.evidenceId)
+        || !containsPhrase(evidence.content, item.claim)
+        || !containsPhrase(content, item.claim);
+    });
+    graders.push(makeCheck('evidence_support', Boolean(trace) && unsupported.length === 0,
+      !trace ? 'Cannot check evidence support because the agent trace is missing or invalid.'
+        : unsupported.length
+          ? `Claims were missing from the answer, their cited evidence, or the retrieval trace: ${unsupported.map((item) => `${item.claim} (${item.evidenceId})`).join('; ')}`
+          : 'Each required claim appears in the final answer and its cited, retrieved evidence.'));
+  }
+
+  if (Array.isArray(rules.toolCallExpectations)) {
+    const proposed = trace ? trace.proposedToolCalls : (Array.isArray(response?.toolCalls) ? response.toolCalls : []);
+    const missing = rules.toolCallExpectations.filter((expected) => !proposed.some((actual) => {
+      if (actual?.name !== expected.name) return false;
+      if (expected.arguments === undefined) return true;
+      return expected.argumentMatch === 'contains'
+        ? includesJsonSubset(actual.arguments ?? {}, expected.arguments)
+        : deepEqualJson(actual.arguments ?? {}, expected.arguments);
+    }));
+    graders.push(makeCheck('tool_selection_and_arguments', Boolean(trace) && missing.length === 0,
+      !trace ? 'Cannot verify tool selection or arguments because the agent trace is missing or invalid.'
+        : missing.length
+          ? `Expected tool calls were missing or had invalid arguments: ${missing.map((item) => item.name).join(', ')}`
+          : 'Expected tools were selected with matching arguments.'));
+  }
+
+  if (rules.stepConsistency && typeof rules.stepConsistency === 'object') {
+    const consistencyFailures = [];
+    if (trace && trace.intermediateSteps.length === 0
+      && (rules.stepConsistency.requireValidEvidenceIds === true
+        || rules.stepConsistency.requireConclusionsInFinalAnswer === true)) {
+      consistencyFailures.push('No intermediate steps were supplied.');
+    }
+    if (rules.stepConsistency.requireValidEvidenceIds === true && trace) {
+      for (const step of trace.intermediateSteps) {
+        const missing = step.evidenceIds.filter((id) => !evidenceById.has(id));
+        if (missing.length) consistencyFailures.push(`${step.stepId} references unknown evidence: ${missing.join(', ')}`);
+      }
+    }
+    if (rules.stepConsistency.requireConclusionsInFinalAnswer === true && trace) {
+      for (const step of trace.intermediateSteps) {
+        if (step.conclusion && !containsPhrase(content, step.conclusion)) {
+          consistencyFailures.push(`${step.stepId} conclusion is absent from the final answer`);
+        }
+      }
+    }
+    graders.push(makeCheck('intermediate_final_consistency', Boolean(trace) && consistencyFailures.length === 0,
+      !trace ? 'Cannot check intermediate/final consistency because the agent trace is missing or invalid.'
+        : consistencyFailures.length ? consistencyFailures.join('; ')
+          : 'Intermediate evidence references and conclusions are consistent with the final answer.'));
+  }
+  return graders;
 }
 
 /** Diagnostic only: describe a keyword that appears solely inside a longer word (e.g. "day" in "days"). */
@@ -170,6 +287,8 @@ export function gradeCase(testCase, response) {
         ? 'The answer explicitly indicates that the available information is insufficient or that the policy does not establish an answer.'
         : 'Expected an explicit abstention, but no recognized uncertainty or insufficient-information statement was detected.'));
   }
+
+  graders.push(...gradeTraceRules(response, rules.traceRules));
 
   const score = graders.length ? graders.reduce((sum, grader) => sum + grader.score, 0) / graders.length : 1;
   return {

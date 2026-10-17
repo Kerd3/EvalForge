@@ -33,6 +33,19 @@ describe('mock LLM provider', () => {
     expect(first.toolCalls[0].name).toBe('lookup_order');
   });
 
+  it('passes through recorded agent traces as inert fixture data', async () => {
+    const provider = createLlmProvider({ provider: 'mock', model: 'mock-v1' });
+    const agentTrace = {
+      schemaVersion: 'evalforge.agent-trace/v1', retrievalResults: [], citations: [],
+      proposedToolCalls: [{ name: 'delete_account', arguments: { accountId: 'A-1' } }],
+      executedToolResults: [], intermediateSteps: []
+    };
+    const response = await provider.generate({
+      testCase: { input: { mock_response: { content: 'Recorded response.', agentTrace } } }
+    });
+    expect(response.agentTrace).toEqual(agentTrace);
+  });
+
   it('has a fallback response when no fixture is supplied', async () => {
     const provider = createLlmProvider({ provider: 'mock' });
     const response = await provider.generate({ testCase: { input: { message: 'hello' } } });

@@ -1,6 +1,7 @@
 import { env } from '../config/env.js';
 import { createLlmProvider, estimateCostDetails } from '../providers/llm-provider.js';
 import { gradeCase } from './grading.service.js';
+import { validateAgentTrace } from './agent-trace.service.js';
 import {
   addAuditEvent,
   getEvaluationById,
@@ -186,6 +187,9 @@ export async function processEvaluationRun(runId) {
           : [...new Set(costCalls.map((call) => call.explanation))].join(' ')
       };
       const providerMetadata = { ...(response.providerMetadata ?? {}), costEstimate };
+      const agentTraceValidation = response.agentTrace === undefined || response.agentTrace === null
+        ? null : validateAgentTrace(response.agentTrace);
+      const storedAgentTrace = agentTraceValidation?.success ? agentTraceValidation.data : null;
       trace.push({
         type: 'model.completed', at: new Date().toISOString(), latencyMs,
         provider: provider.name, model: actualModel, requestedModel: providerMetadata.requestedModel ?? provider.model,
@@ -200,6 +204,9 @@ export async function processEvaluationRun(runId) {
         });
       }
       trace.push({ type: 'grading.completed', at: new Date().toISOString(), score: grade.score, passed: grade.passed });
+      if (agentTraceValidation && !agentTraceValidation.success) {
+        trace.push({ type: 'agent_trace.rejected', at: new Date().toISOString(), message: agentTraceValidation.error });
+      }
 
       errorStage = 'result_persistence';
       failureCategory = 'evaluator_error';
@@ -207,7 +214,14 @@ export async function processEvaluationRun(runId) {
         || (Array.isArray(response.toolCalls) && response.toolCalls.length > 0);
       await saveEvaluationResult({
         runId, testCaseId: testCase.id, status: grade.passed ? 'passed' : 'failed',
-        actualOutput: { content: response.content, toolCalls: response.toolCalls, providerMetadata },
+        actualOutput: {
+          content: response.content,
+          toolCalls: response.toolCalls,
+          ...(storedAgentTrace ? { agentTrace: storedAgentTrace } : {}),
+          ...(agentTraceValidation && !agentTraceValidation.success
+            ? { agentTraceValidation: { valid: false, error: agentTraceValidation.error } } : {}),
+          providerMetadata
+        },
         toolCalls: response.toolCalls, graders: grade.graders, score: grade.score, latencyMs,
         inputTokens, outputTokens, estimatedCostUsd,
         errorMessage: hasUsableOutput ? null : 'The model returned no usable text or proposed tool calls.',

@@ -63,6 +63,103 @@ export async function createEvaluationRun({ datasetId, datasetVersionId, provide
   }
 }
 
+/** Persist a fully supplied run atomically. This path never creates a queue job. */
+export async function createRecordedEvaluationRun({ datasetVersionId, source, model, responses, ownerId, gradeResponse, validateTrace }) {
+  const client = await pool.connect();
+  const runId = randomUUID();
+  try {
+    await client.query('BEGIN');
+    const version = await client.query(
+      `SELECT v.id FROM dataset_versions v JOIN datasets d ON d.id = v.dataset_id
+       WHERE v.id = $1 AND d.owner_id = $2 FOR SHARE`, [datasetVersionId, ownerId]
+    );
+    if (!version.rowCount) {
+      const error = new Error('Dataset version not found'); error.statusCode = 404; throw error;
+    }
+    const casesResult = await client.query(
+      `SELECT tc.* FROM test_cases tc WHERE tc.dataset_version_id = $1
+       ORDER BY tc.position_index ASC, tc.created_at, tc.name FOR SHARE`, [datasetVersionId]
+    );
+    const caseIds = casesResult.rows.map((testCase) => testCase.id);
+    const submittedIds = responses.map((item) => item.test_case_id);
+    const uniqueIds = new Set(submittedIds);
+    const missing = caseIds.filter((id) => !uniqueIds.has(id));
+    const extra = submittedIds.filter((id) => !caseIds.includes(id));
+    if (uniqueIds.size !== submittedIds.length || missing.length || extra.length || responses.length !== caseIds.length) {
+      const error = new Error('Responses must contain exactly one entry for every test case in the dataset version');
+      error.statusCode = 400;
+      error.details = { missing_test_case_ids: missing, extra_test_case_ids: [...new Set(extra)], duplicate_test_case_ids: submittedIds.filter((id, index) => submittedIds.indexOf(id) !== index) };
+      throw error;
+    }
+    const byId = new Map(responses.map((item) => [item.test_case_id, item]));
+    const graded = casesResult.rows.map((testCase) => {
+      const item = byId.get(testCase.id);
+      const trace = validateTrace(item.response.agentTrace);
+      if (!trace.success) {
+        const error = new Error(`Invalid agent trace for test case ${testCase.id}: ${trace.error}`);
+        error.statusCode = 400; throw error;
+      }
+      return { testCase, item, agentTrace: trace.data, grade: gradeResponse(testCase, { ...item.response, agentTrace: trace.data }) };
+    });
+    await client.query(
+      `INSERT INTO evaluation_runs
+       (id, dataset_version_id, provider, model, system_prompt, status, total_cases, owner_id, started_at, completed_at)
+       VALUES ($1,$2,'recorded',$3,$4,'completed',$5,$6,NOW(),NOW())`,
+      [runId, datasetVersionId, model, `Recorded trace source: ${source}`, graded.length, ownerId]
+    );
+    for (const { testCase, item, agentTrace, grade } of graded) {
+      const latency = item.latency_ms ?? null;
+      const output = {
+        content: item.response.content,
+        toolCalls: item.response.toolCalls,
+        agentTrace,
+        providerMetadata: {
+          source,
+          requestedModel: model,
+          actualModel: item.actual_model ?? null,
+          recorded: true
+        }
+      };
+      const lifecycle = [
+        { type: 'case.started', at: new Date().toISOString(), testCaseId: testCase.id },
+        { type: 'recorded_trace.received', at: new Date().toISOString(), source, model },
+        { type: 'grading.completed', at: new Date().toISOString(), score: grade.score, passed: grade.passed }
+      ];
+      await client.query(
+        `INSERT INTO evaluation_results
+         (id, run_id, test_case_id, status, actual_output, tool_calls, graders, score, latency_ms, input_tokens, output_tokens, estimated_cost_usd, trace, started_at, completed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NULL,$12,NOW(),NOW())`,
+        [randomUUID(), runId, testCase.id, grade.passed ? 'passed' : 'failed', JSON.stringify(output),
+          JSON.stringify(item.response.toolCalls), JSON.stringify(grade.graders), grade.score, latency,
+          item.input_tokens ?? null, item.output_tokens ?? null, JSON.stringify(lifecycle)]
+      );
+    }
+    await client.query(
+      `UPDATE evaluation_runs SET
+         completed_cases=$2, passed_cases=$3, failed_cases=$4,
+         average_latency_ms=$5, total_input_tokens=$6, total_output_tokens=$7
+       WHERE id=$1`,
+      [runId, graded.length, graded.filter(({ grade }) => grade.passed).length,
+        graded.filter(({ grade }) => !grade.passed).length,
+        graded.some(({ item }) => item.latency_ms !== undefined)
+          ? graded.reduce((sum, { item }) => sum + (item.latency_ms ?? 0), 0) / graded.filter(({ item }) => item.latency_ms !== undefined).length : null,
+        graded.reduce((sum, { item }) => sum + (item.input_tokens ?? 0), 0),
+        graded.reduce((sum, { item }) => sum + (item.output_tokens ?? 0), 0)]
+    );
+    await client.query(
+      'INSERT INTO audit_events(id, run_id, event_type, details) VALUES ($1,$2,$3,$4)',
+      [randomUUID(), runId, 'evaluation.recorded', JSON.stringify({ source, model, totalCases: graded.length })]
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+  return getEvaluationWithResults(runId, ownerId);
+}
+
 export async function createEvaluationCampaign({ datasetId, datasetVersionId, provider, model, systemPrompt, repeatCount, ownerId }) {
   const client = await pool.connect();
   const campaignId = randomUUID();

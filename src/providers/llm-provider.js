@@ -537,6 +537,8 @@ export function createLlmProvider({ provider, model }) {
           return {
             content: typeof mockResponse.content === 'string' ? mockResponse.content : '',
             toolCalls: Array.isArray(mockResponse.toolCalls) ? mockResponse.toolCalls : [],
+            ...(mockResponse.agentTrace && typeof mockResponse.agentTrace === 'object'
+              ? { agentTrace: mockResponse.agentTrace } : {}),
             usage: { inputTokens: 0, outputTokens: 0 },
             providerMetadata: { mode: 'mock', deterministic: true }
           };

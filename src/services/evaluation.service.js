@@ -2,12 +2,15 @@ import { env } from '../config/env.js';
 import { HttpError } from '../middleware/error-handler.js';
 import {
   compareEvaluationRuns,
+  createRecordedEvaluationRun,
   createEvaluationRun,
   getEvaluationById,
   getEvaluationWithResults,
   listEvaluations,
   updateRunStatus
 } from '../repositories/evaluations.repository.js';
+import { gradeCase } from './grading.service.js';
+import { validateAgentTrace } from './agent-trace.service.js';
 
 export function createEvaluationService({ enqueue }) {
   return {
@@ -38,6 +41,21 @@ export function createEvaluationService({ enqueue }) {
         throw new HttpError(503, 'Could not enqueue evaluation. Check that Redis is running.');
       }
       return getEvaluationById(run.id, ownerId);
+    },
+    async createRecorded(data, ownerId) {
+      // Reject oversized nested trace payloads even when called outside Express' body parser.
+      let serialized;
+      try { serialized = JSON.stringify(data); } catch { throw new HttpError(400, 'Recorded payload must be JSON serializable'); }
+      if (Buffer.byteLength(serialized, 'utf8') > 900_000) throw new HttpError(413, 'Recorded payload exceeds the 900 KB limit');
+      return createRecordedEvaluationRun({
+        datasetVersionId: data.dataset_version_id,
+        source: data.source,
+        model: data.model,
+        responses: data.responses,
+        ownerId,
+        gradeResponse: gradeCase,
+        validateTrace: validateAgentTrace
+      });
     },
     async list(limit = 50, ownerId) {
       return listEvaluations(limit, ownerId);

@@ -58,14 +58,13 @@
           "content": "Keep the item and original packaging until customer support responds."
         }
       },
-      "expected_output": null,
+      "expected_output": "Keep the item and original packaging until customer support responds.",
       "required_keywords": [
+        "keep the item",
         "original packaging",
         "support responds"
       ],
-      "forbidden_keywords": [
-        "throw it away"
-      ],
+      "forbidden_keywords": [],
       "required_tools": [],
       "forbidden_tools": [],
       "tools": [],
@@ -128,7 +127,7 @@
       },
       "expected_output": null,
       "required_keywords": [
-        "30 days"
+        "30"
       ],
       "forbidden_keywords": [],
       "required_tools": [],
@@ -150,7 +149,7 @@
       },
       "expected_output": null,
       "required_keywords": [
-        "customer support"
+        "support email"
       ],
       "forbidden_keywords": [],
       "required_tools": [],

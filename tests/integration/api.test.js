@@ -19,6 +19,7 @@ function makeApp() {
   const evaluationService = {
     list: vi.fn().mockResolvedValue([]),
     create: vi.fn().mockResolvedValue({ id: '11111111-1111-4111-8111-111111111111', status: 'queued' }),
+    createRecorded: vi.fn().mockResolvedValue({ id: '11111111-1111-4111-8111-111111111111', status: 'completed', provider: 'recorded' }),
     getById: vi.fn().mockResolvedValue({ id: '11111111-1111-4111-8111-111111111111', status: 'completed', results: [] }),
     cancel: vi.fn().mockResolvedValue({ id: '11111111-1111-4111-8111-111111111111', status: 'cancelled' }),
     compare: vi.fn().mockResolvedValue({ pass_rate_delta_percentage_points: 5 })
@@ -158,6 +159,33 @@ describe('EvalForge API routes', () => {
     expect(response.status).toBe(202);
     expect(response.body.data.status).toBe('queued');
     expect(evaluationService.create).toHaveBeenCalledOnce();
+  });
+
+  it('accepts recorded evaluations and forwards the authenticated owner without queueing generation', async () => {
+    const { app, evaluationService } = makeApp();
+    const versionId = '22222222-2222-4222-8222-222222222222';
+    const caseId = '33333333-3333-4333-8333-333333333333';
+    const response = await request(app).post('/api/evaluations/recorded').send({
+      dataset_version_id: versionId, source: 'support-agent', model: 'agent-v2',
+      responses: [{ test_case_id: caseId, response: {
+        content: 'Found the answer.', toolCalls: [],
+        agentTrace: { schemaVersion: 'evalforge.agent-trace/v1', retrievalResults: [], citations: [], proposedToolCalls: [], executedToolResults: [], intermediateSteps: [] }
+      } }]
+    });
+    expect(response.status).toBe(201);
+    expect(response.body.data.provider).toBe('recorded');
+    expect(evaluationService.createRecorded).toHaveBeenCalledWith(expect.objectContaining({ dataset_version_id: versionId }), '11111111-1111-4111-8111-111111111111');
+    expect(evaluationService.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects recorded responses without a trace before calling the service', async () => {
+    const { app, evaluationService } = makeApp();
+    const response = await request(app).post('/api/evaluations/recorded').send({
+      dataset_version_id: '22222222-2222-4222-8222-222222222222', source: 'agent', model: 'v1',
+      responses: [{ test_case_id: '33333333-3333-4333-8333-333333333333', response: { content: 'answer' } }]
+    });
+    expect(response.status).toBe(400);
+    expect(evaluationService.createRecorded).not.toHaveBeenCalled();
   });
 
 
