@@ -12,6 +12,7 @@ const app = createApp({
   datasetService,
   evaluationService,
   campaignService,
+  trustProxyHops: env.TRUST_PROXY_HOPS,
   healthCheck: async () => {
     await pool.query('SELECT 1');
     const client = await evaluationQueue.client;

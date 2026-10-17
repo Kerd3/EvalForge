@@ -12,7 +12,21 @@
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <div class="app-shell">
+  <section class="account-gate" id="account-gate" hidden aria-labelledby="account-title">
+    <form class="account-card" id="account-form">
+      <div class="brand-mark"><span></span><span></span><span></span></div>
+      <p class="eyebrow">EVALFORGE ACCOUNT</p>
+      <h1 id="account-title">Sign in to your workspace</h1>
+      <p class="account-description" id="account-description">Your datasets and evaluation history are private to your account.</p>
+      <label for="account-email">Email</label><input id="account-email" type="email" autocomplete="email" maxlength="254" required>
+      <label for="account-password">Password</label><input id="account-password" type="password" autocomplete="current-password" minlength="1" maxlength="128" required>
+      <div id="account-bootstrap-wrap" hidden><label for="account-bootstrap">Bootstrap secret</label><input id="account-bootstrap" type="password" autocomplete="off" maxlength="256"><small>Required once to claim existing unowned datasets and runs.</small></div>
+      <button class="button button-primary" id="account-submit" type="submit">Sign in</button>
+      <p class="account-error" id="account-error" role="alert"></p>
+      <button class="account-mode" type="button" id="account-mode" hidden>Create an account</button>
+    </form>
+  </section>
+  <div class="app-shell" hidden>
     <aside class="sidebar">
       <a class="brand" href="/" aria-label="EvalForge home">
         <span class="brand-mark"><span></span><span></span><span></span></span>
@@ -34,7 +48,7 @@
     <main class="main-content">
       <header class="topbar">
         <div class="breadcrumbs"><span>Workspace</span><span class="crumb-slash">/</span><strong>Overview</strong></div>
-        <div class="topbar-actions"><span class="mode-tag"><span class="tiny-dot"></span> DEV ENVIRONMENT</span><button class="icon-button" id="refresh-button" title="Refresh data" aria-label="Refresh data">↻</button><div class="avatar">EF</div></div>
+        <div class="topbar-actions"><span class="mode-tag"><span class="tiny-dot"></span> PRIVATE WORKSPACE</span><button class="icon-button" id="refresh-button" title="Refresh data" aria-label="Refresh data">↻</button><span id="account-email-label" class="account-email-label"></span><button class="button button-secondary" id="signout-button" type="button">Sign out</button></div>
       </header>
 
       <section class="page-heading" id="overview">
@@ -82,6 +96,7 @@
           <div id="model-report-summary" class="model-report-summary"></div>
           <div class="table-wrap"><table class="data-table model-report-table"><thead><tr><th>ACTUAL MODEL</th><th>CASES</th><th>LLM CALLS</th><th>PASS RATE</th><th>PASS / FAIL / ERROR</th><th>AVG LATENCY</th><th>TOKENS IN / OUT</th><th>EST. COST</th><th>FALLBACKS</th></tr></thead><tbody id="model-report-table-body"><tr><td colspan="9" class="empty-cell">Select a run to inspect its model routing.</td></tr></tbody></table></div>
           <p class="model-report-note" id="model-report-note"></p>
+          <div class="fallback-summary" id="fallback-summary" hidden></div>
         </section>
         <div class="table-wrap case-results-wrap"><table class="data-table results-table"><thead><tr><th>TEST CASE</th><th>ACTUAL MODEL / ROUTING</th><th>RESULT</th><th>SCORE</th><th>LATENCY</th><th>DETAIL</th></tr></thead><tbody id="results-table-body"><tr><td colspan="6" class="empty-cell">Select a run to inspect its cases.</td></tr></tbody></table></div>
         <div id="result-inspection" class="result-inspection" hidden></div>

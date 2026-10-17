@@ -51,12 +51,15 @@ try {
   if (existing.rowCount) {
     console.log('Demo dataset already exists; skipping seed.');
   } else {
-    await createDataset({
+    const users = await pool.query('SELECT id FROM users ORDER BY created_at ASC LIMIT 2');
+    if (users.rows.length > 1) {
+      console.log('Multiple accounts exist; skipping demo seed to avoid assigning starter data to an arbitrary user.');
+    } else await createDataset({
       name: 'EvalForge Demo: Support Agent Reliability',
       description: 'A deterministic starter dataset demonstrating keyword checks, abstention, tool-call checks, forbidden content, and JSON validation. Run with the mock provider without an API key.',
       test_cases: demoCases
-    });
-    console.log(`Seeded demo dataset with ${demoCases.length} test cases.`);
+    }, users.rows[0]?.id);
+    if (users.rows.length <= 1) console.log(`Seeded demo dataset with ${demoCases.length} test cases${users.rows[0] ? ` for ${users.rows[0].id}` : ' for initial account setup'}.`);
   }
 } catch (error) {
   console.error('Database seed failed:', error.message);

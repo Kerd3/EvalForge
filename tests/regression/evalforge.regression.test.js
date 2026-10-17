@@ -118,7 +118,7 @@ describe('EvalForge critical-path regression suite', () => {
         } }, trace: []
       },
       {
-        test_case_name: 'quota error', status: 'error', latency_ms: 1200,
+        test_case_name: 'quota error', status: 'error', failure_category: 'provider_error', latency_ms: 1200,
         input_tokens: 0, output_tokens: 0, estimated_cost_usd: null,
         actual_output: null, error_message: 'HTTP 429 quota exceeded', trace: []
       }
@@ -148,5 +148,35 @@ describe('EvalForge critical-path regression suite', () => {
     expect(jsonResult.graders.some((grader) => grader.name === 'valid_json' && grader.passed)).toBe(true);
     expect(safetyResult.passed).toBe(false);
     expect(safetyResult.graders.find((grader) => grader.name === 'forbidden_tools').passed).toBe(false);
+  });
+
+  // Regression: "Abstains when the support email is not provided" scored 67%
+  // (2 of 3 checks). A correct source-scoped abstention such as "The provided
+  // context does not include a support email" was not recognized because the
+  // grader only knew verbs like "specify"/"state". The grader must accept that
+  // wording WITHOUT accepting an invented address. (The stored Gemini output for
+  // the original failed run was not available when this fixture was written; the
+  // original result should be re-graded to confirm which of the two applied.)
+  it('recognizes a source-scoped abstention for a missing support email but rejects a fabricated address', () => {
+    const supportEmailCase = {
+      name: 'Abstains when the support email is not provided',
+      input: { context: 'Returns are accepted within 30 days of delivery.', message: 'What is the support email address?' },
+      forbidden_keywords: ['@'],
+      grading_rules: { mustAbstain: true }
+    };
+    const honest = gradeCase(supportEmailCase, {
+      content: 'The provided context does not include a support email address. Please check the official website.',
+      toolCalls: []
+    });
+    const fabricated = gradeCase(supportEmailCase, {
+      content: 'You can email support@example.com.',
+      toolCalls: []
+    });
+    expect(honest.passed).toBe(true);
+    expect(honest.score).toBe(1);
+    expect(fabricated.passed).toBe(false);
+    expect(fabricated.graders.filter((grader) => !grader.passed).map((grader) => grader.name).sort()).toEqual(['abstention', 'forbidden_keywords']);
+    // 2 of 3 checks passing is exactly the 67% score seen in the dashboard.
+    expect(fabricated.score).toBeCloseTo(0.3333, 3);
   });
 });

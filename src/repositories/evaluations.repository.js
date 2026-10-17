@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { pool } from '../db/pool.js';
 import { buildModelReport } from '../services/model-reporting.service.js';
 import { buildReliabilityReport } from '../services/reliability-analysis.service.js';
+import { buildEvaluationQualityReport, buildPairedComparison } from '../services/evaluation-quality.service.js';
 
-export async function createEvaluationRun({ datasetId, datasetVersionId, provider, model, systemPrompt }) {
+export async function createEvaluationRun({ datasetId, datasetVersionId, provider, model, systemPrompt, ownerId }) {
   const client = await pool.connect();
   const runId = randomUUID();
   try {
@@ -11,7 +12,7 @@ export async function createEvaluationRun({ datasetId, datasetVersionId, provide
     let versionId = datasetVersionId;
     if (datasetId) {
       const versionResult = await client.query(
-        'SELECT id FROM dataset_versions WHERE dataset_id = $1 ORDER BY version_number DESC LIMIT 1', [datasetId]
+        'SELECT v.id FROM dataset_versions v JOIN datasets d ON d.id = v.dataset_id WHERE v.dataset_id = $1 AND d.owner_id = $2 ORDER BY v.version_number DESC LIMIT 1', [datasetId, ownerId]
       );
       versionId = versionResult.rows[0]?.id;
       if (!versionId) {
@@ -20,7 +21,7 @@ export async function createEvaluationRun({ datasetId, datasetVersionId, provide
         throw error;
       }
     } else {
-      const versionResult = await client.query('SELECT id FROM dataset_versions WHERE id = $1', [versionId]);
+      const versionResult = await client.query('SELECT v.id FROM dataset_versions v JOIN datasets d ON d.id = v.dataset_id WHERE v.id = $1 AND d.owner_id = $2', [versionId, ownerId]);
       if (!versionResult.rows[0]) {
         const error = new Error('Dataset version not found');
         error.statusCode = 404;
@@ -37,9 +38,9 @@ export async function createEvaluationRun({ datasetId, datasetVersionId, provide
     }
     await client.query(
       `INSERT INTO evaluation_runs
-       (id, dataset_version_id, provider, model, system_prompt, status, total_cases)
-       VALUES ($1,$2,$3,$4,$5,'queued',$6)`,
-      [runId, versionId, provider, model, systemPrompt, casesResult.rowCount]
+       (id, dataset_version_id, provider, model, system_prompt, status, total_cases, owner_id)
+       VALUES ($1,$2,$3,$4,$5,'queued',$6,$7)`,
+      [runId, versionId, provider, model, systemPrompt, casesResult.rowCount, ownerId]
     );
     for (const row of casesResult.rows) {
       await client.query(
@@ -53,7 +54,7 @@ export async function createEvaluationRun({ datasetId, datasetVersionId, provide
       [randomUUID(), runId, 'evaluation.queued', JSON.stringify({ provider, model, totalCases: casesResult.rowCount })]
     );
     await client.query('COMMIT');
-    return getEvaluationById(runId);
+    return getEvaluationById(runId, ownerId);
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -62,7 +63,7 @@ export async function createEvaluationRun({ datasetId, datasetVersionId, provide
   }
 }
 
-export async function createEvaluationCampaign({ datasetId, datasetVersionId, provider, model, systemPrompt, repeatCount }) {
+export async function createEvaluationCampaign({ datasetId, datasetVersionId, provider, model, systemPrompt, repeatCount, ownerId }) {
   const client = await pool.connect();
   const campaignId = randomUUID();
   try {
@@ -70,7 +71,7 @@ export async function createEvaluationCampaign({ datasetId, datasetVersionId, pr
     let versionId = datasetVersionId;
     if (datasetId) {
       const versionResult = await client.query(
-        'SELECT id FROM dataset_versions WHERE dataset_id = $1 ORDER BY version_number DESC LIMIT 1', [datasetId]
+        'SELECT v.id FROM dataset_versions v JOIN datasets d ON d.id = v.dataset_id WHERE v.dataset_id = $1 AND d.owner_id = $2 ORDER BY v.version_number DESC LIMIT 1', [datasetId, ownerId]
       );
       versionId = versionResult.rows[0]?.id;
       if (!versionId) {
@@ -79,7 +80,7 @@ export async function createEvaluationCampaign({ datasetId, datasetVersionId, pr
         throw error;
       }
     } else {
-      const versionResult = await client.query('SELECT id FROM dataset_versions WHERE id = $1', [versionId]);
+      const versionResult = await client.query('SELECT v.id FROM dataset_versions v JOIN datasets d ON d.id = v.dataset_id WHERE v.id = $1 AND d.owner_id = $2', [versionId, ownerId]);
       if (!versionResult.rows[0]) {
         const error = new Error('Dataset version not found');
         error.statusCode = 404;
@@ -98,18 +99,18 @@ export async function createEvaluationCampaign({ datasetId, datasetVersionId, pr
 
     await client.query(
       `INSERT INTO evaluation_campaigns
-       (id, dataset_version_id, provider, model, system_prompt, repeat_count, status)
-       VALUES ($1,$2,$3,$4,$5,$6,'queued')`,
-      [campaignId, versionId, provider, model, systemPrompt, repeatCount]
+       (id, dataset_version_id, provider, model, system_prompt, repeat_count, status, owner_id)
+       VALUES ($1,$2,$3,$4,$5,$6,'queued',$7)`,
+      [campaignId, versionId, provider, model, systemPrompt, repeatCount, ownerId]
     );
 
     for (let repetitionIndex = 1; repetitionIndex <= repeatCount; repetitionIndex += 1) {
       const runId = randomUUID();
       await client.query(
         `INSERT INTO evaluation_runs
-         (id, dataset_version_id, provider, model, system_prompt, status, total_cases, campaign_id, repetition_index)
-         VALUES ($1,$2,$3,$4,$5,'queued',$6,$7,$8)`,
-        [runId, versionId, provider, model, systemPrompt, casesResult.rowCount, campaignId, repetitionIndex]
+         (id, dataset_version_id, provider, model, system_prompt, status, total_cases, campaign_id, repetition_index, owner_id)
+         VALUES ($1,$2,$3,$4,$5,'queued',$6,$7,$8,$9)`,
+        [runId, versionId, provider, model, systemPrompt, casesResult.rowCount, campaignId, repetitionIndex, ownerId]
       );
       for (const row of casesResult.rows) {
         await client.query(
@@ -125,7 +126,7 @@ export async function createEvaluationCampaign({ datasetId, datasetVersionId, pr
     }
 
     await client.query('COMMIT');
-    return getEvaluationCampaignById(campaignId);
+    return getEvaluationCampaignById(campaignId, ownerId);
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -134,8 +135,8 @@ export async function createEvaluationCampaign({ datasetId, datasetVersionId, pr
   }
 }
 
-export async function getEvaluationCampaignState(campaignId) {
-  const { rows } = await pool.query('SELECT * FROM evaluation_campaigns WHERE id = $1', [campaignId]);
+export async function getEvaluationCampaignState(campaignId, ownerId = null) {
+  const { rows } = await pool.query('SELECT * FROM evaluation_campaigns WHERE id = $1 AND ($2::uuid IS NULL OR owner_id = $2)', [campaignId, ownerId]);
   return rows[0] ?? null;
 }
 
@@ -186,13 +187,13 @@ export async function failEvaluationCampaign(campaignId, message) {
   }
 }
 
-export async function cancelEvaluationCampaign(campaignId) {
+export async function cancelEvaluationCampaign(campaignId, ownerId = null) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     await client.query(
       `UPDATE evaluation_campaigns SET status='cancelled', completed_at=NOW()
-       WHERE id=$1 AND status IN ('queued','running')`, [campaignId]
+       WHERE id=$1 AND ($2::uuid IS NULL OR owner_id = $2) AND status IN ('queued','running')`, [campaignId, ownerId]
     );
     const runs = await client.query(
       `UPDATE evaluation_runs SET status='cancelled', completed_at=NOW()
@@ -213,13 +214,13 @@ export async function cancelEvaluationCampaign(campaignId) {
   }
 }
 
-export async function getEvaluationCampaignById(campaignId) {
+export async function getEvaluationCampaignById(campaignId, ownerId = null) {
   const { rows: campaignRows } = await pool.query(
     `SELECT c.*, v.version_number, d.id AS dataset_id, d.name AS dataset_name
      FROM evaluation_campaigns c
      JOIN dataset_versions v ON v.id = c.dataset_version_id
      JOIN datasets d ON d.id = v.dataset_id
-     WHERE c.id = $1`, [campaignId]
+     WHERE c.id = $1 AND ($2::uuid IS NULL OR c.owner_id = $2)`, [campaignId, ownerId]
   );
   const campaign = campaignRows[0];
   if (!campaign) return null;
@@ -237,9 +238,9 @@ export async function getEvaluationCampaignById(campaignId) {
          COALESCE(array_agg(DISTINCT model_name ORDER BY model_name) FILTER (WHERE model_name IS NOT NULL), ARRAY[]::TEXT[]) AS actual_model_names,
          COUNT(*) FILTER (WHERE model_name IS NOT NULL)::int AS model_response_cases,
          COUNT(*) FILTER (WHERE fallback_used)::int AS fallback_cases,
-         COUNT(*) FILTER (WHERE status = 'error' AND model_name IS NULL)::int AS provider_error_cases
+         COUNT(*) FILTER (WHERE status = 'error' AND failure_category = 'provider_error' AND model_name IS NULL)::int AS provider_error_cases
        FROM (
-         SELECT er.status,
+         SELECT er.status, er.failure_category,
            CASE WHEN r.provider = 'mock' AND er.actual_output IS NOT NULL THEN r.model
              ELSE COALESCE(er.actual_output #>> '{providerMetadata,actualModel}', er.actual_output #>> '{providerMetadata,modelVersion}', er.actual_output #>> '{providerMetadata,model}')
            END AS model_name,
@@ -252,7 +253,7 @@ export async function getEvaluationCampaignById(campaignId) {
   const { rows: results } = await pool.query(
     `SELECT er.run_id, r.repetition_index, r.provider, r.model, r.status AS run_status,
             er.test_case_id, tc.name AS test_case_name, er.status, er.actual_output,
-            er.latency_ms, er.estimated_cost_usd
+            er.latency_ms, er.estimated_cost_usd, er.failure_category, er.error_stage
      FROM evaluation_results er
      JOIN evaluation_runs r ON r.id = er.run_id
      JOIN test_cases tc ON tc.id = er.test_case_id
@@ -261,7 +262,7 @@ export async function getEvaluationCampaignById(campaignId) {
   return { ...campaign, runs, reliability: buildReliabilityReport({ campaign, runs, results }) };
 }
 
-export async function listEvaluations(limit = 50) {
+export async function listEvaluations(limit = 50, ownerId = null) {
   const { rows } = await pool.query(
     `SELECT r.*, c.repeat_count AS campaign_repeat_count, v.version_number, d.id AS dataset_id, d.name AS dataset_name,
        model_summary.actual_model_names,
@@ -277,9 +278,9 @@ export async function listEvaluations(limit = 50) {
          COALESCE(array_agg(DISTINCT model_name ORDER BY model_name) FILTER (WHERE model_name IS NOT NULL), ARRAY[]::TEXT[]) AS actual_model_names,
          COUNT(*) FILTER (WHERE model_name IS NOT NULL)::int AS model_response_cases,
          COUNT(*) FILTER (WHERE fallback_used)::int AS fallback_cases,
-         COUNT(*) FILTER (WHERE status = 'error' AND model_name IS NULL)::int AS provider_error_cases
+         COUNT(*) FILTER (WHERE status = 'error' AND failure_category = 'provider_error' AND model_name IS NULL)::int AS provider_error_cases
        FROM (
-         SELECT er.status,
+         SELECT er.status, er.failure_category,
            CASE
              WHEN r.provider = 'mock' AND er.actual_output IS NOT NULL THEN r.model
              ELSE COALESCE(
@@ -292,25 +293,26 @@ export async function listEvaluations(limit = 50) {
          FROM evaluation_results er WHERE er.run_id = r.id
        ) detected_models
      ) model_summary ON TRUE
-     ORDER BY r.created_at DESC LIMIT $1`, [limit]
+     WHERE ($2::uuid IS NULL OR r.owner_id = $2)
+     ORDER BY r.created_at DESC LIMIT $1`, [limit, ownerId]
   );
   return rows;
 }
 
-export async function getEvaluationById(runId) {
+export async function getEvaluationById(runId, ownerId = null) {
   const { rows } = await pool.query(
     `SELECT r.*, c.repeat_count AS campaign_repeat_count, v.version_number, d.id AS dataset_id, d.name AS dataset_name
      FROM evaluation_runs r
      JOIN dataset_versions v ON v.id = r.dataset_version_id
      JOIN datasets d ON d.id = v.dataset_id
      LEFT JOIN evaluation_campaigns c ON c.id = r.campaign_id
-     WHERE r.id = $1`, [runId]
+     WHERE r.id = $1 AND ($2::uuid IS NULL OR r.owner_id = $2)`, [runId, ownerId]
   );
   return rows[0] ?? null;
 }
 
-export async function getEvaluationWithResults(runId) {
-  const run = await getEvaluationById(runId);
+export async function getEvaluationWithResults(runId, ownerId = null) {
+  const run = await getEvaluationById(runId, ownerId);
   if (!run) return null;
   const { rows } = await pool.query(
     `SELECT er.*, tc.name AS test_case_name, tc.input AS test_input,
@@ -327,7 +329,8 @@ export async function getEvaluationWithResults(runId) {
     ...run,
     results: rows,
     audit_events: events,
-    model_report: buildModelReport(run, rows)
+    model_report: buildModelReport(run, rows),
+    quality_report: buildEvaluationQualityReport(rows)
   };
 }
 
@@ -356,17 +359,17 @@ export async function markResultStarted(runId, testCaseId) {
   );
 }
 
-export async function saveEvaluationResult({ runId, testCaseId, status, actualOutput, toolCalls, graders, score, latencyMs, inputTokens, outputTokens, estimatedCostUsd, errorMessage, trace }) {
+export async function saveEvaluationResult({ runId, testCaseId, status, actualOutput, toolCalls, graders, score, latencyMs, inputTokens, outputTokens, estimatedCostUsd, errorMessage, trace, failureCategory = null, errorStage = null }) {
   await pool.query(
     `UPDATE evaluation_results SET status=$3, actual_output=$4, tool_calls=$5, graders=$6,
        score=$7, latency_ms=$8, input_tokens=$9, output_tokens=$10, estimated_cost_usd=$11,
-       error_message=$12, trace=$13, completed_at=NOW()
+       error_message=$12, failure_category=$13, error_stage=$14, trace=$15, completed_at=NOW()
      WHERE run_id=$1 AND test_case_id=$2`,
     [runId, testCaseId, status,
       actualOutput === undefined || actualOutput === null ? null : JSON.stringify(actualOutput),
       JSON.stringify(toolCalls ?? []), JSON.stringify(graders ?? []), score ?? null, latencyMs ?? null,
       inputTokens ?? null, outputTokens ?? null, estimatedCostUsd ?? null, errorMessage ?? null,
-      JSON.stringify(trace ?? [])]
+      failureCategory ?? null, errorStage ?? null, JSON.stringify(trace ?? [])]
   );
   await refreshRunSummary(runId);
 }
@@ -401,14 +404,14 @@ export async function refreshRunSummary(runId) {
   );
 }
 
-export async function updateRunStatus(runId, status, errorMessage = null) {
+export async function updateRunStatus(runId, status, errorMessage = null, ownerId = null) {
   const times = status === 'running'
     ? ', started_at = COALESCE(started_at, NOW())'
     : ['completed', 'failed', 'cancelled'].includes(status) ? ', completed_at = NOW()' : '';
   const result = await pool.query(
     `UPDATE evaluation_runs SET status = $2, error_message = $3 ${times}
-     WHERE id = $1 AND (status = $2 OR (status IN ('queued','running') AND $2 IN ('running','completed','failed','cancelled')))`,
-    [runId, status, errorMessage]
+     WHERE id = $1 AND ($4::uuid IS NULL OR owner_id = $4) AND (status = $2 OR (status IN ('queued','running') AND $2 IN ('running','completed','failed','cancelled')))`,
+    [runId, status, errorMessage, ownerId]
   );
   if (result.rowCount > 0) {
     await addAuditEvent(runId, `evaluation.${status}`, errorMessage ? { message: errorMessage } : {});
@@ -423,42 +426,49 @@ export async function addAuditEvent(runId, eventType, details = {}) {
   );
 }
 
-export async function compareEvaluationRuns(baselineId, candidateId) {
+export async function compareEvaluationRuns(baselineId, candidateId, ownerId = null) {
   const [baseline, candidate] = await Promise.all([
-    getEvaluationWithResults(baselineId), getEvaluationWithResults(candidateId)
+    getEvaluationWithResults(baselineId, ownerId), getEvaluationWithResults(candidateId, ownerId)
   ]);
   if (!baseline || !candidate) {
     const error = new Error('One or both evaluation runs were not found');
     error.statusCode = 404;
     throw error;
   }
-  const baseByCase = new Map(baseline.results.map((row) => [row.test_case_id, row]));
-  const compared = candidate.results.map((candidateResult) => {
-    const base = baseByCase.get(candidateResult.test_case_id);
-    return {
-      test_case_id: candidateResult.test_case_id,
-      test_case_name: candidateResult.test_case_name,
-      baseline_status: base?.status ?? 'not_present',
-      candidate_status: candidateResult.status,
-      changed: Boolean(base && base.status !== candidateResult.status),
-      regression: base?.status === 'passed' && candidateResult.status !== 'passed',
-      improvement: base && base.status !== 'passed' && candidateResult.status === 'passed'
-    };
+
+  const comparison = buildPairedComparison(baseline.results, candidate.results, {
+    baselineDatasetVersionId: baseline.dataset_version_id,
+    candidateDatasetVersionId: candidate.dataset_version_id
   });
-  const basePassRate = baseline.total_cases ? (Number(baseline.passed_cases) / Number(baseline.total_cases)) * 100 : 0;
-  const candidatePassRate = candidate.total_cases ? (Number(candidate.passed_cases) / Number(candidate.total_cases)) * 100 : 0;
+  const baseRate = comparison.baseline_pass_rate;
+  const candidateRate = comparison.candidate_pass_rate;
   return {
+    schema_version: comparison.schema_version,
     baseline: {
-      id: baseline.id, model: baseline.model, provider: baseline.provider,
-      pass_rate: Number(basePassRate.toFixed(2)), model_report: baseline.model_report
+      id: baseline.id,
+      model: baseline.model,
+      provider: baseline.provider,
+      pass_rate: baseRate.rate === null ? null : Number(baseRate.rate.toFixed(2)),
+      pass_rate_sample_size: baseRate.answered,
+      pass_rate_confidence_interval_95: baseRate.interval,
+      model_report: baseline.model_report,
+      quality_report: baseline.quality_report
     },
     candidate: {
-      id: candidate.id, model: candidate.model, provider: candidate.provider,
-      pass_rate: Number(candidatePassRate.toFixed(2)), model_report: candidate.model_report
+      id: candidate.id,
+      model: candidate.model,
+      provider: candidate.provider,
+      pass_rate: candidateRate.rate === null ? null : Number(candidateRate.rate.toFixed(2)),
+      pass_rate_sample_size: candidateRate.answered,
+      pass_rate_confidence_interval_95: candidateRate.interval,
+      model_report: candidate.model_report,
+      quality_report: candidate.quality_report
     },
-    pass_rate_delta_percentage_points: Number((candidatePassRate - basePassRate).toFixed(2)),
-    regressions: compared.filter((item) => item.regression).length,
-    improvements: compared.filter((item) => item.improvement).length,
-    cases: compared
+    pass_rate_delta_percentage_points: comparison.pass_rate_delta_percentage_points,
+    regressions: comparison.paired_analysis.regressions,
+    improvements: comparison.paired_analysis.improvements,
+    paired_analysis: comparison.paired_analysis,
+    data_quality: comparison.data_quality,
+    cases: comparison.cases
   };
 }

@@ -19,7 +19,7 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character
 const pretty = (value) => JSON.stringify(value ?? null, null, 2);
 const formatDate = (value) => value ? new Date(value).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
 const number = (value) => Number(value ?? 0).toLocaleString();
-const runPassRate = (run) => Number(run.total_cases) ? Number((Number(run.passed_cases ?? 0) / Number(run.total_cases) * 100).toFixed(1)) : 0;
+const runPassRate = (run) => { const answered = Number(run.passed_cases ?? 0) + Number(run.failed_cases ?? 0); return answered ? Number((Number(run.passed_cases ?? 0) / answered * 100).toFixed(1)) : null; };
 const statusLabel = (status) => ({ queued: 'Queued', running: 'Running', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled' }[status] ?? status ?? 'Unknown');
 const formatLatency = (value) => value === null || value === undefined || !Number.isFinite(Number(value)) ? '—' : `${number(Math.round(Number(value)))} ms`;
 const formatUsd = (value) => `$${Number(value ?? 0).toFixed(8)}`;
@@ -159,11 +159,19 @@ function buildClientModelReport(run) {
 async function api(url, options = {}) {
   const response = await fetch(url, {
     ...options,
+    credentials: 'same-origin',
     headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers ?? {}) }
   });
   let body;
   try { body = await response.json(); } catch { body = {}; }
-  if (!response.ok) throw new Error(body?.error?.message ?? `Request failed (${response.status})`);
+  if (!response.ok) {
+    if (response.status === 401 && !url.startsWith('/api/auth/')) {
+      document.querySelector('.app-shell').hidden = true;
+      document.querySelector('#account-gate').hidden = false;
+      document.querySelector('#account-error').textContent = 'Your session expired. Sign in again to continue.';
+    }
+    throw new Error(body?.error?.message ?? `Request failed (${response.status})`);
+  }
   return body.data;
 }
 
@@ -239,8 +247,8 @@ function updateDatasetSelect() {
 function renderMetrics() {
   $('#metric-runs').textContent = number(state.runs.length);
   const latestCompleted = state.runs.find((run) => run.status === 'completed' && Number(run.completed_cases) > 0);
-  $('#metric-pass-rate').innerHTML = latestCompleted ? `${runPassRate(latestCompleted)}<small>%</small>` : '—<small>%</small>';
-  $('#metric-pass-context').textContent = latestCompleted ? `${latestCompleted.passed_cases}/${latestCompleted.total_cases} passed · latest completed run` : 'Waiting for completed results';
+  $('#metric-pass-rate').innerHTML = latestCompleted && runPassRate(latestCompleted) !== null ? `${runPassRate(latestCompleted)}<small>%</small>` : '—<small>%</small>';
+  $('#metric-pass-context').textContent = latestCompleted ? `${latestCompleted.passed_cases}/${Number(latestCompleted.passed_cases ?? 0) + Number(latestCompleted.failed_cases ?? 0)} answered cases · latest completed run` : 'Waiting for completed results';
   const totalCases = state.runs.reduce((sum, run) => sum + Number(run.completed_cases ?? 0), 0);
   $('#metric-cases').textContent = number(totalCases);
   const latencies = state.runs.filter((run) => run.average_latency_ms !== null && run.average_latency_ms !== undefined).map((run) => Number(run.average_latency_ms));
@@ -311,7 +319,7 @@ function renderRuns() {
       const rate = runPassRate(run);
       const metric = run.status === 'running' || run.status === 'queued'
         ? `${number(run.completed_cases)}/${number(run.total_cases)}`
-        : `${rate}%`;
+        : rate === null ? '—' : `${rate}%`;
       const canCompare = ['completed', 'failed'].includes(run.status);
       const isChecked = state.selectedCompareRuns.includes(run.id);
       const actualModels = Array.isArray(run.actual_model_names) ? run.actual_model_names.filter(Boolean) : [];
@@ -354,7 +362,9 @@ function renderDatasets() {
     <div class="dataset-actions">
       <button class="dataset-run" data-dataset-id="${escapeHtml(dataset.id)}">Run evaluation →</button>
       <button class="dataset-edit" data-edit-dataset-id="${escapeHtml(dataset.id)}">Edit dataset</button>
+      <button class="dataset-calibrate" data-calibrate-dataset-id="${escapeHtml(dataset.id)}">Calibrate goldens</button>
     </div>
+    <div class="dataset-calibration" data-calibration-dataset-id="${escapeHtml(dataset.id)}" hidden></div>
   </article>`).join('');
 }
 
@@ -365,6 +375,41 @@ function renderCompareBar() {
   $('#compare-label').textContent = count === 0 ? 'Select two completed runs' : count === 1 ? 'Select one more run' : `${count} runs selected`;
   $('#compare-button').disabled = count !== 2;
   $('#compare-result').hidden = true;
+}
+
+function fallbackReasonLabel(reason) {
+  return ({ 'provider-unavailable': 'temporarily unavailable', 'quota/rate-limit': 'rate-limited / quota', timeout: 'timed out' })[reason] ?? (reason || 'unknown');
+}
+
+function renderFallbackAttempts(attempts) {
+  if (!Array.isArray(attempts) || !attempts.length) return '<small>No structured attempt data was recorded; see the original text below.</small>';
+  const rows = attempts.map((attempt) => `<tr>
+    <td>${escapeHtml(attempt.model ?? '—')}</td>
+    <td>${attempt.outcome === 'skipped_cooldown' ? 'Skipped (cooldown)' : 'Failed'}</td>
+    <td>${escapeHtml(fallbackReasonLabel(attempt.reason))}${attempt.http_status ? ` · HTTP ${escapeHtml(attempt.http_status)}` : ''}</td>
+    <td>${escapeHtml(attempt.cooldown_until ?? '—')}</td>
+    <td>${attempt.message ? escapeHtml(attempt.message) : '—'}</td>
+  </tr>`).join('');
+  return `<div class="table-wrap"><table class="fallback-attempts-table"><thead><tr><th>Model</th><th>Outcome</th><th>Reason</th><th>Cooldown until</th><th>Provider response</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderFallbackSummary(summary) {
+  const box = $('#fallback-summary');
+  if (!box) return;
+  if (!summary) { box.hidden = true; box.innerHTML = ''; return; }
+  const cooldown = summary.first_cooldown_until
+    ? `<div><span>Cooldown window</span><strong>${escapeHtml(summary.first_cooldown_until)}${summary.last_cooldown_until && summary.last_cooldown_until !== summary.first_cooldown_until ? ` → ${escapeHtml(summary.last_cooldown_until)}` : ''}</strong></div>` : '';
+  const perCase = (summary.cases ?? []).map((item) => `<details class="fallback-case"><summary>${escapeHtml(item.test_case_name ?? item.test_case_id ?? 'Test case')} → ${escapeHtml(item.actual_model ?? 'unknown model')}</summary>${renderFallbackAttempts(item.attempts)}${item.raw_reason ? `<pre>${escapeHtml(item.raw_reason)}</pre>` : ''}</details>`).join('');
+  box.hidden = false;
+  box.innerHTML = `<p class="fallback-headline"><strong>${escapeHtml(summary.headline)}</strong></p>
+    <details class="fallback-details"><summary>Fallback details (${number(summary.fallback_cases)} case${summary.fallback_cases === 1 ? '' : 's'})</summary>
+      <div class="routing-details">
+        <div><span>Requested model</span><strong>${escapeHtml((summary.requested_models ?? []).join(', ') || '—')}</strong></div>
+        <div><span>Actual model</span><strong>${escapeHtml((summary.actual_models ?? []).join(', ') || '—')}</strong></div>
+        <div><span>Failure reason</span><strong>${escapeHtml((summary.reasons ?? []).map(fallbackReasonLabel).join(', ') || '—')}${(summary.http_statuses ?? []).length ? ` · HTTP ${escapeHtml(summary.http_statuses.join('/'))}` : ''}</strong></div>
+        ${cooldown}
+      </div>${perCase}
+    </details>`;
 }
 
 function renderModelReport(run) {
@@ -402,7 +447,7 @@ function renderModelReport(run) {
     const statusCounts = `${number(model.passed_cases)} / ${number(model.failed_cases)} / ${number(model.error_cases)}`;
     const fallback = `${number(model.fallback_cases)}${model.case_count ? ` (${Number(model.fallback_rate_percentage ?? 0).toFixed(1)}%)` : ''}`;
     const reason = Array.isArray(model.fallback_reasons) && model.fallback_reasons.length
-      ? `<small class="fallback-reason">${escapeHtml(model.fallback_reasons.join(' · '))}</small>` : '';
+      ? '<small class="fallback-reason">Served via fallback — see fallback details below.</small>' : '';
     const operations = Array.isArray(model.call_operations) && model.call_operations.length
       ? `<small>Calls: ${escapeHtml(model.call_operations.map((operation) => operation === 'llm_judge' ? 'LLM judge' : operation).join(', '))}</small>` : '';
     return `<tr>
@@ -420,7 +465,7 @@ function renderModelReport(run) {
   const unassigned = report.unassigned_cases;
   if (unassigned && Number(unassigned.case_count ?? 0) > 0) {
     rows.push(`<tr class="unassigned-model-row">
-      <td><strong class="model-name-cell">No model response</strong><small>Provider error, pending request, or missing model metadata</small></td>
+      <td><strong class="model-name-cell">No model response</strong><small>No model response; inspect the failure classification below</small></td>
       <td>${number(unassigned.case_count)}</td><td>${number(unassigned.model_call_count)}</td><td>—</td>
       <td>${number(unassigned.passed_cases)} / ${number(unassigned.failed_cases)} / ${number(unassigned.error_cases)}</td>
       <td class="date-cell">${escapeHtml(formatLatency(unassigned.average_latency_ms))}</td>
@@ -434,11 +479,12 @@ function renderModelReport(run) {
 
   const notices = [];
   if (report.mixed_model_run) notices.push('This run contains responses from more than one actual model. Treat its overall pass rate as a mixed-model result, not a single-model benchmark.');
-  if (fallbackCases) notices.push(`${fallbackCases} case(s) used fallback routing. Requested and actual model names are shown separately above and for each test case.`);
+  if (fallbackCases && !report.fallback_summary) notices.push(`${fallbackCases} case(s) used fallback routing. Requested and actual model names are shown separately above and for each test case.`);
   if (noResponseCases) notices.push(`${noResponseCases} case(s) have no attributable model response. Provider errors are not counted as model-quality failures in the per-model pass rates.`);
   if (report.total_cost_explanation) notices.push(report.total_cost_explanation);
   if (!notices.length && modelRows.length) notices.push('All observed responses are attributed to the model metadata stored for each case.');
   $('#model-report-note').textContent = notices.join(' ');
+  renderFallbackSummary(report.fallback_summary ?? null);
 }
 
 function campaignCostLabel(report) {
@@ -537,11 +583,21 @@ async function openRunDetails(runId, { quiet = false } = {}) {
     $('#detail-title').textContent = `${run.dataset_name} · Run details`;
     $('#cancel-run-button').hidden = !['queued', 'running'].includes(run.status);
     const report = run.model_report ?? buildClientModelReport(run);
+    const quality = run.quality_report ?? {};
+    const failures = quality.failures ?? {};
+    const qualityInterval = quality.model_quality?.confidence_interval_95;
+    const qualityIntervalLabel = qualityInterval ? `${qualityInterval.low_percentage}%–${qualityInterval.high_percentage}%` : 'Not enough graded cases';
+    const answered = Number(quality.model_quality?.sample_size ?? (Number(run.passed_cases ?? 0) + Number(run.failed_cases ?? 0)));
+    const rate = runPassRate(run);
     const stats = [
       ['Status', statusLabel(run.status)],
-      ['Pass rate', `${runPassRate(run)}%`],
-      ['Passed', `${number(run.passed_cases)} / ${number(run.total_cases)}`],
-      ['Errors', number(run.error_cases)],
+      ['Pass rate', rate === null ? '—' : `${rate}%`],
+      ['Graded sample', `${answered} / ${number(run.total_cases)}`],
+      ['95% pass-rate CI', qualityIntervalLabel],
+      ['Provider errors', number(failures.provider_errors)],
+      ['Evaluator errors', number(failures.evaluator_errors)],
+      ['Model failures', number(failures.model_failures)],
+      ['Unclassified legacy errors', number(failures.unclassified_legacy_errors)],
       ['Avg. latency', run.average_latency_ms == null ? '—' : `${Math.round(Number(run.average_latency_ms))} ms`],
       ['Token usage', number(Number(run.total_input_tokens ?? 0) + Number(run.total_output_tokens ?? 0))]
     ];
@@ -592,7 +648,7 @@ function inspectResult(index) {
         <div><span>Latency</span><strong>${escapeHtml(formatLatency(result.latency_ms))}</strong></div>
         <div><span>Input / output tokens</span><strong>${number(result.input_tokens)} / ${number(result.output_tokens)}</strong></div>
         <div><span>Estimated cost</span><strong>${escapeHtml(costDisplay.value)}</strong><small class="cost-explanation">${escapeHtml(costDisplay.explanation)}</small></div>
-      </div>${routing.fallbackReason ? `<p class="routing-reason"><strong>Fallback reason:</strong> ${escapeHtml(routing.fallbackReason)}</p>` : ''}${result.error_message ? `<p class="routing-reason error-reason"><strong>Provider/execution error:</strong> ${escapeHtml(result.error_message)}</p>` : ''}</div>
+      </div>${routing.fallbackReason ? `<details class="routing-reason fallback-case"><summary><strong>Fallback used:</strong> ${escapeHtml(routing.requestedModel)} → ${escapeHtml(actualModel)} (expand for attempts and original text)</summary>${renderFallbackAttempts(metadata.fallbackAttempts)}<pre>${escapeHtml(routing.fallbackReason)}</pre></details>` : ''}${result.failure_category || result.error_message ? `<p class="routing-reason error-reason"><strong>Failure classification:</strong> ${escapeHtml(result.failure_category ?? 'unclassified legacy error')}${result.error_stage ? ` · ${escapeHtml(result.error_stage)}` : ''}${result.error_message ? ` — ${escapeHtml(result.error_message)}` : ''}</p>` : ''}</div>
       <div class="inspection-block"><h4>Test input</h4><pre>${escapeHtml(pretty(result.test_input))}</pre></div>
       <div class="inspection-block"><h4>Model output</h4><pre>${escapeHtml(pretty(actual))}</pre></div>
       <div class="inspection-block"><h4>Grader results (${graders.length})</h4><div class="grader-list">${graders.length ? graders.map((grader) => `<div class="grader-item"><span class="grader-mark ${grader.passed ? '' : 'fail'}">${grader.passed ? '✓' : '×'}</span><div><strong>${escapeHtml(grader.name)} · ${Math.round(Number(grader.score ?? 0) * 100)}%</strong><small>${escapeHtml(grader.details)}</small></div></div>`).join('') : `<div class="grader-item"><span class="grader-mark fail">!</span><div><strong>No grader output</strong><small>${escapeHtml(result.error_message ?? 'This case may still be pending or failed before grading.')}</small></div></div>`}</div></div>
@@ -808,6 +864,26 @@ $('#results-table-body').addEventListener('click', (event) => {
   if (button) inspectResult(Number(button.dataset.resultIndex));
 });
 $('#dataset-grid').addEventListener('click', async (event) => {
+  const calibrateButton = event.target.closest('.dataset-calibrate');
+  if (calibrateButton) {
+    const datasetId = calibrateButton.dataset.calibrateDatasetId;
+    const resultBox = $(`[data-calibration-dataset-id="${CSS.escape(datasetId)}"]`);
+    calibrateButton.disabled = true;
+    try {
+      const report = await api(`/api/datasets/${encodeURIComponent(datasetId)}/calibration`);
+      const summary = report.summary ?? {};
+      const matrix = report.confusion_matrix ?? {};
+      const failures = (report.examples ?? []).filter((item) => ['false_positive', 'false_negative', 'evaluator_error'].includes(item.outcome));
+      resultBox.hidden = false;
+      const accuracy = summary.accuracy == null ? 'Not calibrated' : `${(Number(summary.accuracy) * 100).toFixed(1)}%`;
+      const pct = (value) => (value == null ? 'undefined (no cases in denominator)' : `${(Number(value) * 100).toFixed(1)}%`);
+      const detailMetrics = report.status === 'no_calibration_data' ? '' : `<div class="dataset-meta"><span>Precision: ${escapeHtml(pct(summary.precision))}</span><span>Recall: ${escapeHtml(pct(summary.recall))}</span><span>Specificity: ${escapeHtml(pct(summary.specificity))}</span><span>F1: ${escapeHtml(pct(summary.f1_score))}</span></div><div class="dataset-meta"><span>TP ${number(matrix.true_positive)} · TN ${number(matrix.true_negative)} · FP ${number(matrix.false_positive)} · FN ${number(matrix.false_negative)}</span></div>`;
+      resultBox.innerHTML = `<div class="dataset-meta"><strong>Calibration · ${escapeHtml(report.dataset?.name ?? 'Dataset')} v${escapeHtml(report.dataset?.version_number ?? '—')}</strong><span>${number(summary.evaluated_examples)} / ${number(summary.golden_examples)} evaluated</span></div><div class="dataset-meta"><span>Accuracy: ${escapeHtml(accuracy)}</span><span>FP: ${number(matrix.false_positive)} · FN: ${number(matrix.false_negative)} · Evaluator errors: ${number(matrix.evaluator_error)}</span></div>${detailMetrics}<p class="dataset-description">${escapeHtml(summary.interpretation ?? '')}</p>${failures.length ? `<div class="grader-list">${failures.map((item) => `<div class="grader-item"><span class="grader-mark fail">!</span><div><strong>${escapeHtml(item.outcome)} · ${escapeHtml(item.test_case_name)}</strong><small>${escapeHtml(item.error ?? item.rationale ?? 'Compare actual grader output with the gold label.')}</small></div></div>`).join('')}</div>` : ''}`;
+      calibrateButton.textContent = 'Refresh calibration';
+    } catch (error) { showToast(error.message, 'error'); }
+    finally { calibrateButton.disabled = false; }
+    return;
+  }
   const editButton = event.target.closest('.dataset-edit');
   if (editButton) {
     await editDataset(editButton.dataset.editDatasetId);
@@ -838,20 +914,26 @@ $('#compare-button').addEventListener('click', async () => {
     const result = await api('/api/evaluations/compare', {
       method: 'POST', body: JSON.stringify({ baseline_run_id: state.selectedCompareRuns[0], candidate_run_id: state.selectedCompareRuns[1] })
     });
-    const delta = Number(result.pass_rate_delta_percentage_points);
-    const deltaText = `${delta > 0 ? '+' : ''}${delta.toFixed(2)} percentage points`;
-    const deltaColor = delta > 0 ? 'var(--green)' : delta < 0 ? 'var(--red)' : 'var(--muted)';
-    const cases = result.cases.filter((item) => item.changed || item.baseline_status === 'not_present');
+    const delta = result.pass_rate_delta_percentage_points == null ? null : Number(result.pass_rate_delta_percentage_points);
+    const deltaText = delta === null ? 'Unavailable — no completed pass/fail outcomes' : `${delta > 0 ? '+' : ''}${delta.toFixed(2)} percentage points`;
+    const deltaColor = delta === null ? 'var(--muted)' : delta > 0 ? 'var(--green)' : delta < 0 ? 'var(--red)' : 'var(--muted)';
+    const cases = result.cases.filter((item) => item.changed || item.baseline_status === 'not_present' || item.candidate_status === 'not_present');
     const describeModels = (runSummary) => {
       const report = runSummary.model_report;
       if (!report) return `Requested: ${escapeHtml(runSummary.model)}`;
       const actual = Array.isArray(report.actual_models) && report.actual_models.length ? report.actual_models.join(', ') : 'no model response recorded';
       const fallbackText = Number(report.fallback_cases ?? 0) ? ` · fallback ${number(report.fallback_cases)}/${number(report.cases_with_model_response)}` : '';
       const mixed = report.mixed_model_run ? ' · mixed-model run' : '';
-      return `Requested: ${escapeHtml(runSummary.model)} · actual: ${escapeHtml(actual)}${escapeHtml(fallbackText)}${escapeHtml(mixed)}`;
+      const interval = runSummary.pass_rate_confidence_interval_95;
+      const intervalText = interval ? ` · 95% CI ${interval.low_percentage}%–${interval.high_percentage}% (n=${number(runSummary.pass_rate_sample_size)})` : ' · CI unavailable';
+      const rate = runSummary.pass_rate == null ? 'Not available' : `${runSummary.pass_rate}% pass rate`;
+      return `Requested: ${escapeHtml(runSummary.model)} · actual: ${escapeHtml(actual)} · ${escapeHtml(rate)}${escapeHtml(intervalText)}${escapeHtml(fallbackText)}${escapeHtml(mixed)}`;
     };
+    const paired = result.paired_analysis ?? {};
+    const pairedCi = paired.confidence_interval_95;
+    const pairedCiText = pairedCi ? `${pairedCi.low_percentage_points} to ${pairedCi.high_percentage_points} pp` : 'unavailable (requires at least two matched graded cases)';
     $('#compare-result').hidden = false;
-    $('#compare-result').innerHTML = `<div><strong>Baseline:</strong> ${escapeHtml(result.baseline.provider)} · ${describeModels(result.baseline)} · ${result.baseline.pass_rate}% pass rate</div><div><strong>Candidate:</strong> ${escapeHtml(result.candidate.provider)} · ${describeModels(result.candidate)} · ${result.candidate.pass_rate}% pass rate</div><div><strong>Pass-rate change:</strong> <span style="color:${deltaColor}">${escapeHtml(deltaText)}</span></div><div><strong>Regressions:</strong> ${result.regressions} &nbsp; <strong>Improvements:</strong> ${result.improvements}</div>${cases.length ? `<div><strong>Changed cases:</strong> ${cases.map((item) => escapeHtml(item.test_case_name)).join(', ')}</div>` : '<div>No test-case status changes.</div>'}`;
+    $('#compare-result').innerHTML = `<div><strong>Baseline:</strong> ${escapeHtml(result.baseline.provider)} · ${describeModels(result.baseline)}</div><div><strong>Candidate:</strong> ${escapeHtml(result.candidate.provider)} · ${describeModels(result.candidate)}</div><div><strong>Overall pass-rate change:</strong> <span style="color:${deltaColor}">${escapeHtml(deltaText)}</span></div><div><strong>Paired analysis:</strong> ${number(paired.matched_graded_cases)} matched graded cases · ${number(paired.improvements)} improvements · ${number(paired.regressions)} regressions · conservative 95% interval for paired pass-rate change (n=${number(paired.matched_graded_cases)}): ${escapeHtml(pairedCiText)}</div>${paired.excluded_breakdown ? `<div><small>Excluded from paired estimate: ${number(paired.excluded_breakdown.only_in_baseline)} only in baseline · ${number(paired.excluded_breakdown.only_in_candidate)} only in candidate · ${number(paired.excluded_breakdown.in_both_but_not_graded_in_both)} pending/errored in at least one run.</small></div>` : ''}${result.data_quality?.comparability_warning ? `<div class="routing-reason error-reason"><strong>Comparability warning:</strong> ${escapeHtml(result.data_quality.comparability_warning)}</div>` : ''}<div><small>${escapeHtml(paired.assumptions ?? 'Errors and unmatched cases are excluded from the paired estimate.')}</small></div><div><strong>Failure classes (baseline → candidate):</strong> provider ${number(result.baseline.quality_report?.failures?.provider_errors)} → ${number(result.candidate.quality_report?.failures?.provider_errors)}, evaluator ${number(result.baseline.quality_report?.failures?.evaluator_errors)} → ${number(result.candidate.quality_report?.failures?.evaluator_errors)}, model ${number(result.baseline.quality_report?.failures?.model_failures)} → ${number(result.candidate.quality_report?.failures?.model_failures)}</div><div><strong>Regressions:</strong> ${result.regressions} &nbsp; <strong>Improvements:</strong> ${result.improvements}</div>${cases.length ? `<div><strong>Changed or unmatched cases:</strong> ${cases.map((item) => escapeHtml(item.test_case_name)).join(', ')}</div>` : '<div>No test-case status changes or unmatched cases.</div>'}`;
   } catch (error) { showToast(error.message, 'error'); }
   finally { button.disabled = false; }
 });
@@ -861,7 +943,61 @@ $('#view-all-runs').addEventListener('click', (event) => {
   $('#runs-table-body').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 
-refreshAll();
+let accountRegistrationEnabled = false;
+let accountRegisterMode = false;
+function setAccountMode(register) {
+  accountRegisterMode = register;
+  $('#account-title').textContent = register ? 'Create your workspace account' : 'Sign in to your workspace';
+  $('#account-submit').textContent = register ? 'Create account' : 'Sign in';
+  $('#account-password').autocomplete = register ? 'new-password' : 'current-password';
+  $('#account-bootstrap-wrap').hidden = !(register && $('#account-bootstrap-wrap').dataset.required === 'true');
+  $('#account-error').textContent = '';
+}
+async function initializeAccount() {
+  try {
+    const info = await api('/api/auth/me');
+    accountRegistrationEnabled = info.registration_enabled;
+    if (info.user) {
+      $('.app-shell').hidden = false;
+      $('#account-gate').hidden = true;
+      $('#account-email-label').textContent = info.user.email;
+      await refreshAll();
+      return;
+    }
+    $('.app-shell').hidden = true;
+    $('#account-gate').hidden = false;
+    $('#account-bootstrap-wrap').dataset.required = String(info.bootstrap_required);
+    $('#account-bootstrap-wrap').hidden = true;
+    $('#account-mode').hidden = !info.registration_enabled;
+    setAccountMode(false);
+    if (!info.registration_enabled) $('#account-description').textContent = 'Registration is disabled. Sign in with an account created by the instance administrator.';
+  } catch (error) {
+    $('#account-gate').hidden = false;
+    $('#account-error').textContent = error.message;
+  }
+}
+$('#account-mode').addEventListener('click', () => {
+  setAccountMode(!accountRegisterMode);
+  $('#account-bootstrap-wrap').hidden = !(accountRegisterMode && $('#account-bootstrap-wrap').dataset.required === 'true');
+});
+$('#account-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const submit = $('#account-submit');
+  submit.disabled = true;
+  $('#account-error').textContent = '';
+  try {
+    const payload = { email: $('#account-email').value, password: $('#account-password').value };
+    if (accountRegisterMode && $('#account-bootstrap-wrap').dataset.required === 'true') payload.bootstrap_secret = $('#account-bootstrap').value;
+    await api(`/api/auth/${accountRegisterMode ? 'register' : 'login'}`, { method: 'POST', body: JSON.stringify(payload) });
+    await initializeAccount();
+  } catch (error) { $('#account-error').textContent = error.message; }
+  finally { submit.disabled = false; }
+});
+$('#signout-button').addEventListener('click', async () => {
+  try { await api('/api/auth/logout', { method: 'POST', body: '{}' }); }
+  finally { window.location.reload(); }
+});
+initializeAccount();
 window.setInterval(async () => {
   const hasActiveRun = state.runs.some((run) => ['queued', 'running'].includes(run.status))
     || ['queued', 'running'].includes(state.selectedCampaign?.status);

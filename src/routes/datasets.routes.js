@@ -8,7 +8,7 @@ export function createDatasetsRouter({ datasetService }) {
 
   router.get('/', async (req, res, next) => {
     try {
-      res.json({ data: await datasetService.list() });
+      res.json({ data: await datasetService.list(req.user.id) });
     } catch (error) { next(error); }
   });
 
@@ -16,7 +16,7 @@ export function createDatasetsRouter({ datasetService }) {
     try {
       const parsed = createDatasetSchema.safeParse(req.body);
       if (!parsed.success) throw new HttpError(400, 'Invalid dataset payload', parsed.error.issues);
-      const dataset = await datasetService.create(parsed.data);
+      const dataset = await datasetService.create(parsed.data, req.user.id);
       res.status(201).json({ data: dataset });
     } catch (error) { next(error); }
   });
@@ -30,15 +30,36 @@ export function createDatasetsRouter({ datasetService }) {
       }
       const parsed = createDatasetSchema.safeParse(req.body);
       if (!parsed.success) throw new HttpError(400, 'Invalid dataset payload', parsed.error.issues);
-      const dataset = await datasetService.createVersion(req.params.id, parsed.data);
+      const dataset = await datasetService.createVersion(req.params.id, parsed.data, req.user.id);
       res.json({ data: dataset });
+    } catch (error) { next(error); }
+  });
+
+  router.get('/:id/calibration', async (req, res, next) => {
+    try {
+      if (!z.string().uuid().safeParse(req.params.id).success) {
+        throw new HttpError(400, 'Dataset id must be a valid UUID');
+      }
+      if (typeof datasetService.calibrate !== 'function') {
+        throw new HttpError(501, 'Golden-set calibration is not available in this service implementation');
+      }
+      let versionId;
+      if (req.query.version_id !== undefined) {
+        const parsedVersionId = z.string().uuid().safeParse(req.query.version_id);
+        if (!parsedVersionId.success) throw new HttpError(400, 'version_id must be a valid UUID');
+        versionId = parsedVersionId.data;
+      }
+      const report = versionId
+        ? await datasetService.calibrate(req.params.id, req.user.id, versionId)
+        : await datasetService.calibrate(req.params.id, req.user.id);
+      res.json({ data: report });
     } catch (error) { next(error); }
   });
 
   router.get('/:id', async (req, res, next) => {
     try {
       if (!z.string().uuid().safeParse(req.params.id).success) throw new HttpError(400, 'Dataset id must be a valid UUID');
-      res.json({ data: await datasetService.getById(req.params.id) });
+      res.json({ data: await datasetService.getById(req.params.id, req.user.id) });
     } catch (error) { next(error); }
   });
 

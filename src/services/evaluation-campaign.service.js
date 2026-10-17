@@ -28,7 +28,7 @@ function resolveModel(provider, suppliedModel) {
 
 export function createEvaluationCampaignService({ enqueue }) {
   return {
-    async create(data) {
+    async create(data, ownerId) {
       ensureProviderConfigured(data.provider);
       const campaign = await createEvaluationCampaign({
         datasetId: data.dataset_id,
@@ -36,7 +36,8 @@ export function createEvaluationCampaignService({ enqueue }) {
         provider: data.provider,
         model: resolveModel(data.provider, data.model),
         systemPrompt: data.system_prompt,
-        repeatCount: data.repeat_count
+        repeatCount: data.repeat_count,
+        ownerId
       });
       try {
         await enqueue(campaign.id);
@@ -45,23 +46,23 @@ export function createEvaluationCampaignService({ enqueue }) {
         await failEvaluationCampaign(campaign.id, message);
         throw new HttpError(503, 'Could not enqueue evaluation campaign. Check that Redis is running.');
       }
-      return getEvaluationCampaignById(campaign.id);
+      return getEvaluationCampaignById(campaign.id, ownerId);
     },
 
-    async getById(id) {
-      const campaign = await getEvaluationCampaignById(id);
+    async getById(id, ownerId) {
+      const campaign = await getEvaluationCampaignById(id, ownerId);
       if (!campaign) throw new HttpError(404, 'Evaluation campaign not found');
       return campaign;
     },
 
-    async cancel(id) {
-      const campaign = await getEvaluationCampaignState(id);
+    async cancel(id, ownerId) {
+      const campaign = await getEvaluationCampaignState(id, ownerId);
       if (!campaign) throw new HttpError(404, 'Evaluation campaign not found');
       if (['completed', 'failed', 'cancelled'].includes(campaign.status)) {
         throw new HttpError(409, `Cannot cancel a campaign with status "${campaign.status}"`);
       }
-      await cancelEvaluationCampaign(id);
-      return getEvaluationCampaignById(id);
+      await cancelEvaluationCampaign(id, ownerId);
+      return getEvaluationCampaignById(id, ownerId);
     }
   };
 }

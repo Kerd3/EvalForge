@@ -8,9 +8,50 @@ function normalize(value) {
   return asText(value).trim().replace(/\s+/g, ' ').toLocaleLowerCase();
 }
 
-function makeCheck(name, passed, details, score = passed ? 1 : 0) {
-  return { name, passed, score, details };
+function makeCheck(name, passed, details, score = passed ? 1 : 0, metadata = {}) {
+  return { name, passed, score, details, ...metadata };
 }
+
+/** Diagnostic only: describe a keyword that appears solely inside a longer word (e.g. "day" in "days"). */
+function embeddedInWord(text, phrase) {
+  const haystack = normalize(text);
+  const needle = normalize(phrase);
+  if (!needle) return null;
+  const index = haystack.indexOf(needle);
+  if (index < 0) return null;
+  const token = /[\p{L}\p{N}_]+/gu;
+  for (const match of haystack.matchAll(token)) {
+    if (match.index <= index && index < match.index + match[0].length && match[0] !== needle) {
+      return `"${needle}" appears only inside "${match[0]}"`;
+    }
+  }
+  return null;
+}
+
+function containsPhrase(text, phrase) {
+  const haystack = normalize(text);
+  const needle = normalize(phrase);
+  if (!needle) return false;
+  let from = 0;
+  while (from <= haystack.length - needle.length) {
+    const index = haystack.indexOf(needle, from);
+    if (index < 0) return false;
+    const before = index > 0 ? haystack[index - 1] : '';
+    const afterIndex = index + needle.length;
+    const after = afterIndex < haystack.length ? haystack[afterIndex] : '';
+    const isWordChar = (character) => character !== '' && /[\p{L}\p{N}_]/u.test(character);
+    // A boundary is only meaningful on an edge of the keyword that is itself a
+    // word character. "cat" must not match inside "concatenate", but a keyword
+    // such as "@" or "$" has non-word edges and must be found inside
+    // "support@example.com" or "pay$5".
+    const startNeedsBoundary = isWordChar(needle[0]);
+    const endNeedsBoundary = isWordChar(needle[needle.length - 1]);
+    if ((!startNeedsBoundary || !isWordChar(before)) && (!endNeedsBoundary || !isWordChar(after))) return true;
+    from = index + 1;
+  }
+  return false;
+}
+
 
 export function gradeCase(testCase, response) {
   const content = typeof response?.content === 'string' ? response.content : '';
@@ -27,13 +68,16 @@ export function gradeCase(testCase, response) {
   ));
 
   if (requiredKeywords.length) {
-    const missing = requiredKeywords.filter((keyword) => !content.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()));
+    const missing = requiredKeywords.filter((keyword) => !containsPhrase(content, keyword));
+    const hints = missing.map((keyword) => embeddedInWord(content, keyword)).filter(Boolean);
     graders.push(makeCheck('required_keywords', missing.length === 0,
-      missing.length ? `Missing required keywords: ${missing.join(', ')}` : 'All required keywords were present.'));
+      missing.length
+        ? `Missing required keywords: ${missing.join(', ')}${hints.length ? `. Keywords match whole words only: ${hints.join('; ')}. Use the exact word or a phrase such as the number itself.` : ''}`
+        : 'All required keywords were present.'));
   }
 
   if (forbiddenKeywords.length) {
-    const found = forbiddenKeywords.filter((keyword) => content.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()));
+    const found = forbiddenKeywords.filter((keyword) => containsPhrase(content, keyword));
     graders.push(makeCheck('forbidden_keywords', found.length === 0,
       found.length ? `Found forbidden keywords: ${found.join(', ')}` : 'No forbidden keywords were present.'));
   }
@@ -42,8 +86,20 @@ export function gradeCase(testCase, response) {
     const expected = typeof testCase.expected_output === 'object' && testCase.expected_output !== null
       ? (testCase.expected_output.content ?? testCase.expected_output)
       : testCase.expected_output;
-    graders.push(makeCheck('exact_match', normalize(content) === normalize(expected),
-      normalize(content) === normalize(expected) ? 'Output exactly matched after whitespace and case normalization.' : 'Output differed from the expected value.'));
+    const normalizedContent = normalize(content);
+    const normalizedExpected = normalize(expected);
+    const semanticEquivalents = Array.isArray(rules.semanticEquivalents) ? rules.semanticEquivalents : [];
+    const matchedEquivalent = semanticEquivalents.find((variant) => normalize(variant) === normalizedContent);
+    const exactMatched = normalizedContent === normalizedExpected;
+    const passed = exactMatched || matchedEquivalent !== undefined;
+    graders.push(makeCheck('exact_match', passed,
+      exactMatched
+        ? 'Output exactly matched after case and whitespace normalization.'
+        : matchedEquivalent !== undefined
+          ? 'Output matched an explicitly configured semantic equivalent; no global fuzzy matching was applied.'
+          : 'Output matched neither the expected value nor any explicitly configured semantic equivalent.',
+      passed ? 1 : 0,
+      matchedEquivalent !== undefined && !exactMatched ? { match_type: 'semantic_equivalent' } : { match_type: 'exact' }));
   }
 
   if (typeof rules.expectedOutputContains === 'string') {
@@ -95,7 +151,18 @@ export function gradeCase(testCase, response) {
       /\b(?:cannot|can't|unable to)\s+(?:tell|say)\s+(?:whether|if)\b/i,
       /\bno\s+(?:policy|information|details|evidence)\s+(?:was|were|is|are)\s+(?:provided|available|supplied)\b/i,
       // Recognize explicit absence-of-mention statements, e.g. "there is no mention of who pays return shipping".
-      /\bthere\s+(?:is|are|was|were)\s+no\s+(?:explicit\s+)?(?:mention|information|detail|indication|statement|reference)\s+(?:of|about|regarding|on|as\s+to)\b/i
+      /\bthere\s+(?:is|are|was|were)\s+no\s+(?:explicit\s+)?(?:mention|information|detail|indication|statement|reference)\s+(?:of|about|regarding|on|as\s+to)\b/i,
+      // Source-scoped absence statements. These require BOTH a reference to the
+      // supplied source (context/information/policy/documentation) and an
+      // absence verb, so a bare "does not include" about the real world
+      // ("The plan does not include a fee") is not treated as abstention.
+      /\b(?:the\s+)?(?:provided|available|supplied|given|reference)?\s*(?:context|information|policy|documentation|text|material)\s+(?:does not|doesn't|do not|don't|did not|didn't)\s+(?:include|contain|list|mention|give|offer|have|name|identify)\b/i,
+      /\b(?:is|are|was|were)(?:\s+not|n['’]t)\s+(?:included|provided|listed|given|available|mentioned|specified|stated|supplied|present|found)\s+(?:in|within|from)\s+(?:the\s+|this\s+|that\s+)?(?:provided\s+|available\s+|supplied\s+|given\s+|reference\s+)?(?:context|information|policy|documentation|text|material)\b/i,
+      /\bi\s+(?:do not|don't|dont)\s+have\s+[^.?!]{0,80}\b(?:in|from)\s+(?:the\s+|this\s+)?(?:provided\s+|available\s+|supplied\s+|given\s+|reference\s+)?(?:context|information|policy|documentation)\b/i,
+      /\b(?:is|are|was|were)(?:\s+not|n['’]t)\s+(?:in|within)\s+(?:the\s+|this\s+)?(?:provided\s+|available\s+|supplied\s+|given\s+|reference\s+)?(?:context|information|policy|documentation|text|material)\b/i,
+      /\b(?:is|are|was|were)(?:\s+not|n['’]t)\s+(?:explicitly\s+)?(?:specified|stated|mentioned|addressed|defined)\b/i,
+      /\b(?:policy|context|document|text|information|material)\b[^.?!]{0,60}?\b(?:does not|doesn't|do not|don't)\s+(?:explicitly\s+)?(?:specify|state|mention|address|say|define)\b/i,
+      /\b(?:was|is|were|are)\s+(?:not|never)\s+(?:provided|supplied|given)\b/i
     ];
     const passed = abstentionPatterns.some((pattern) => pattern.test(content));
     graders.push(makeCheck('abstention', passed,

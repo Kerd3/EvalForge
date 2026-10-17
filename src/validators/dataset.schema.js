@@ -6,6 +6,21 @@ const toolSchema = z.object({
   parameters: z.record(z.unknown()).default({ type: 'object', properties: {} })
 }).strict();
 
+const goldenToolCallSchema = z.object({
+  name: z.string().min(1).max(100),
+  arguments: z.record(z.unknown()).optional()
+}).passthrough();
+
+const goldenExampleSchema = z.object({
+  label: z.enum(['correct', 'incorrect', 'ambiguous', 'conflicting', 'adversarial']),
+  response: z.object({
+    content: z.string().max(20000).default(''),
+    toolCalls: z.array(goldenToolCallSchema).max(30).default([])
+  }).strict(),
+  expected_passed: z.boolean(),
+  rationale: z.string().max(1000).optional()
+}).strict();
+
 const testCaseSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   input: z.union([z.string().max(20000), z.record(z.unknown())]),
@@ -22,9 +37,13 @@ const testCaseSchema = z.object({
     mustAbstain: z.boolean().optional(),
     judgeEnabled: z.boolean().optional(),
     judgeRubric: z.string().max(3000).optional(),
-    requiredKeywords: z.array(z.string()).optional(),
-    forbiddenKeywords: z.array(z.string()).optional()
-  }).default({})
+    semanticEquivalents: z.array(z.string().min(1).max(20000)).max(25).optional(),
+    requiredKeywords: z.array(z.string().min(1).max(200)).max(50).optional(),
+    forbiddenKeywords: z.array(z.string().min(1).max(200)).max(50).optional()
+  }).default({}),
+  // These examples are immutable with their dataset version and are used to
+  // measure deterministic-grader calibration, including false positives/negatives.
+  golden_examples: z.array(goldenExampleSchema).max(20).default([])
 }).strict();
 
 export const createDatasetSchema = z.object({

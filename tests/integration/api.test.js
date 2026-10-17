@@ -13,7 +13,8 @@ function makeApp() {
     getById: vi.fn().mockImplementation(async (id) => {
       if (id === 'missing') { const error = new Error('Dataset not found'); error.statusCode = 404; throw error; }
       return { id, name: 'Example' };
-    })
+    }),
+    calibrate: vi.fn().mockResolvedValue({ schema_version: 'evalforge.grader-calibration/v1', summary: { golden_examples: 1, evaluated_examples: 1, accuracy: 1 } })
   };
   const evaluationService = {
     list: vi.fn().mockResolvedValue([]),
@@ -27,7 +28,11 @@ function makeApp() {
     getById: vi.fn().mockResolvedValue({ id: '22222222-2222-4222-8222-222222222222', status: 'completed', reliability: {} }),
     cancel: vi.fn().mockResolvedValue({ id: '22222222-2222-4222-8222-222222222222', status: 'cancelled', reliability: {} })
   };
-  return { app: createApp({ datasetService, evaluationService, campaignService }), datasetService, evaluationService, campaignService };
+  const authMiddleware = (req, res, next) => {
+    req.user = { id: '11111111-1111-4111-8111-111111111111', email: 'test@example.com' };
+    next();
+  };
+  return { app: createApp({ datasetService, evaluationService, campaignService, authMiddleware }), datasetService, evaluationService, campaignService };
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -77,7 +82,54 @@ describe('EvalForge API routes', () => {
         required_keywords: [], forbidden_keywords: [], required_tools: [], forbidden_tools: [], tools: [],
         grading_rules: { mustAbstain: true }
       })]
-    }));
+    }), '11111111-1111-4111-8111-111111111111');
+  });
+
+  it('accepts versioned labeled golden examples and explicit semantic equivalents', async () => {
+    const { app, datasetService } = makeApp();
+    const response = await request(app).post('/api/datasets').send({
+      name: 'Calibration set',
+      test_cases: [{
+        input: 'What is the status?',
+        expected_output: 'Approved',
+        grading_rules: { exactMatch: true, semanticEquivalents: ['Request approved'] },
+        golden_examples: [{
+          label: 'correct',
+          response: { content: 'Request approved', toolCalls: [] },
+          expected_passed: true,
+          rationale: 'Explicitly accepted equivalent phrase'
+        }]
+      }]
+    });
+    expect(response.status).toBe(201);
+    expect(datasetService.create).toHaveBeenCalledWith(expect.objectContaining({
+      test_cases: [expect.objectContaining({
+        golden_examples: [expect.objectContaining({ label: 'correct', expected_passed: true })],
+        grading_rules: expect.objectContaining({ semanticEquivalents: ['Request approved'] })
+      })]
+    }), '11111111-1111-4111-8111-111111111111');
+  });
+
+  it('returns a dataset calibration report for the authenticated owner', async () => {
+    const { app, datasetService } = makeApp();
+    const datasetId = '11111111-1111-4111-8111-111111111111';
+    const response = await request(app).get(`/api/datasets/${datasetId}/calibration`);
+    expect(response.status).toBe(200);
+    expect(response.body.data.schema_version).toBe('evalforge.grader-calibration/v1');
+    expect(datasetService.calibrate).toHaveBeenCalledWith(datasetId, '11111111-1111-4111-8111-111111111111');
+  });
+
+  it('passes an explicit version_id to calibration and rejects a malformed one', async () => {
+    const { app, datasetService } = makeApp();
+    const datasetId = '11111111-1111-4111-8111-111111111111';
+    const versionId = '44444444-4444-4444-8444-444444444444';
+    const ok = await request(app).get(`/api/datasets/${datasetId}/calibration?version_id=${versionId}`);
+    expect(ok.status).toBe(200);
+    expect(datasetService.calibrate).toHaveBeenCalledWith(datasetId, '11111111-1111-4111-8111-111111111111', versionId);
+    datasetService.calibrate.mockClear();
+    const bad = await request(app).get(`/api/datasets/${datasetId}/calibration?version_id=not-a-uuid`);
+    expect(bad.status).toBe(400);
+    expect(datasetService.calibrate).not.toHaveBeenCalled();
   });
 
   it('rejects invalid dataset edits before calling the service', async () => {
@@ -116,7 +168,7 @@ describe('EvalForge API routes', () => {
     });
     expect(response.status).toBe(202);
     expect(response.body.data.repeat_count).toBe(3);
-    expect(campaignService.create).toHaveBeenCalledWith(expect.objectContaining({ provider: 'mock', repeat_count: 3 }));
+    expect(campaignService.create).toHaveBeenCalledWith(expect.objectContaining({ provider: 'mock', repeat_count: 3 }), '11111111-1111-4111-8111-111111111111');
   });
 
   it('rejects campaign repetition counts outside 2 through 10', async () => {
@@ -134,7 +186,7 @@ describe('EvalForge API routes', () => {
       dataset_id: '11111111-1111-4111-8111-111111111111', provider: 'gemini', model: 'gemini-3.8-flash'
     });
     expect(response.status).toBe(202);
-    expect(evaluationService.create).toHaveBeenCalledWith(expect.objectContaining({ provider: 'gemini', model: 'gemini-3.8-flash' }));
+    expect(evaluationService.create).toHaveBeenCalledWith(expect.objectContaining({ provider: 'gemini', model: 'gemini-3.8-flash' }), '11111111-1111-4111-8111-111111111111');
   });
 
   it('rejects an evaluation request without a dataset identifier', async () => {

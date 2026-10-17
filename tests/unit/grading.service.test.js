@@ -74,3 +74,105 @@ describe('gradeCase', () => {
     expect(gradeCase(testCase, { content: '{not json}', toolCalls: [] }).passed).toBe(false);
   });
 });
+
+// Phase 2 regression fixtures: do not use permissive substring matching and
+// do not silently apply fuzzy matching to exact outputs.
+describe('calibrated deterministic matching', () => {
+  it('avoids keyword false positives from partial words', async () => {
+    const result = gradeCase({
+      input: 'Find the word cat.', required_keywords: ['cat'], forbidden_keywords: [],
+      required_tools: [], forbidden_tools: [], grading_rules: {}
+    }, { content: 'Please concatenate these strings.', toolCalls: [] });
+    expect(result.passed).toBe(false);
+    expect(result.graders.find((grader) => grader.name === 'required_keywords').passed).toBe(false);
+  });
+
+  it('accepts only explicitly configured semantic-equivalent exact outputs', () => {
+    const testCase = {
+      expected_output: 'Approved successfully', required_keywords: [], forbidden_keywords: [],
+      required_tools: [], forbidden_tools: [],
+      grading_rules: { exactMatch: true, semanticEquivalents: ['Your request has been approved.'] }
+    };
+    const equivalent = gradeCase(testCase, { content: 'Your request has been approved.', toolCalls: [] });
+    expect(equivalent.passed).toBe(true);
+    expect(equivalent.graders.find((grader) => grader.name === 'exact_match')).toMatchObject({
+      passed: true, match_type: 'semantic_equivalent'
+    });
+
+    const unlistedVariant = gradeCase(testCase, { content: 'Looks good, approved!', toolCalls: [] });
+    expect(unlistedVariant.passed).toBe(false);
+    expect(unlistedVariant.graders.find((grader) => grader.name === 'exact_match').passed).toBe(false);
+  });
+});
+
+describe('abstention recognition for source-scoped absence statements', () => {
+  const abstainCase = { input: 'q', required_keywords: [], forbidden_keywords: [], required_tools: [], forbidden_tools: [], grading_rules: { mustAbstain: true } };
+  const grade = (content) => gradeCase(abstainCase, { content }).passed;
+
+  it.each([
+    'The provided context does not include a support email address. Please check the official website.',
+    'The provided context does not contain a support email.',
+    'The context does not list a support email address.',
+    "I'm sorry, but the support email address is not included in the information provided.",
+    "I don't have a support email address in the context I was given.",
+    'The reference context does not mention a support email address.',
+    "I cannot provide the support email because it isn't in the context.",
+    'The support email was not provided.'
+  ])('accepts a natural abstention: %s', (content) => {
+    expect(grade(content)).toBe(true);
+  });
+
+  it.each([
+    'You can reach support at support@example.com.',
+    'Our support email is help@acme.test.',
+    'The plan does not include a restocking fee.',
+    'Contact support through the website.',
+    ''
+  ])('still rejects fabricated, confident, or empty answers: %s', (content) => {
+    expect(grade(content)).toBe(false);
+  });
+});
+
+describe('keyword boundaries', () => {
+  const kw = (forbidden, content) => gradeCase({ input: 'q', required_keywords: [], forbidden_keywords: forbidden, required_tools: [], forbidden_tools: [], grading_rules: {} }, { content });
+  it('still rejects substring matches for word keywords', () => {
+    expect(kw(['cat'], 'Use concatenate here.').passed).toBe(true);
+    expect(kw(['cat'], 'A cat sat.').passed).toBe(false);
+  });
+  it('finds keywords with non-word edges inside larger tokens', () => {
+    expect(kw(['@'], 'Email support@example.com').passed).toBe(false);
+    expect(kw(['$'], 'It costs $5').passed).toBe(false);
+    expect(kw(['@'], 'No address given.').passed).toBe(true);
+  });
+});
+
+describe('real Gemini outputs from the Policy Grounding run (2026-10-16)', () => {
+  const run = (rules, content) => gradeCase({ input: 'q', required_keywords: [], forbidden_keywords: [], required_tools: [], forbidden_tools: [], grading_rules: {}, ...rules }, { content, toolCalls: [] });
+  const replacement = 'Based on the provided policy, it is not specified whether customer support will replace a damaged item within 24 hours. The policy explicitly notes that it does not specify replacement processing times.';
+  const sevenDays = 'Based on the reference context, the deadline to report damage to customer support is within 7 calendar days of delivery.';
+
+  it('accepts "it is not specified whether ... the policy does not specify" as an abstention', () => {
+    expect(run({ grading_rules: { mustAbstain: true } }, replacement).passed).toBe(true);
+  });
+
+  it.each([
+    'Customer support will replace it within 24 hours.',
+    'Damage must be reported within 7 calendar days of delivery.',
+    'You can expect a replacement tomorrow, guaranteed.'
+  ])('does not treat a confident answer as abstention: %s', (content) => {
+    expect(run({ grading_rules: { mustAbstain: true } }, content).passed).toBe(false);
+  });
+
+  it('keeps whole-word matching: required "day" is NOT satisfied by "days", and the message says why', () => {
+    const result = run({ required_keywords: ['day'] }, sevenDays);
+    expect(result.passed).toBe(false);
+    expect(result.graders.find((g) => g.name === 'required_keywords').details)
+      .toMatch(/"day" appears only inside "days"/);
+  });
+
+  it('passes when the dataset uses the number or the exact word instead', () => {
+    expect(run({ required_keywords: ['7'] }, sevenDays).passed).toBe(true);
+    expect(run({ required_keywords: ['days'] }, sevenDays).passed).toBe(true);
+    expect(run({ required_keywords: ['7'] }, 'It is 17 weeks.').passed).toBe(false);
+  });
+});

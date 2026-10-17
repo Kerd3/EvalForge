@@ -11,7 +11,7 @@ import {
 
 export function createEvaluationService({ enqueue }) {
   return {
-    async create(data) {
+    async create(data, ownerId) {
       if (data.provider === 'openai' && !env.OPENAI_API_KEY) {
         throw new HttpError(400, 'OPENAI_API_KEY is not configured. Use provider "mock" or add your key to .env.');
       }
@@ -28,7 +28,8 @@ export function createEvaluationService({ enqueue }) {
         datasetVersionId: data.dataset_version_id,
         provider: data.provider,
         model: data.model ?? defaultModels[data.provider],
-        systemPrompt: data.system_prompt
+        systemPrompt: data.system_prompt,
+        ownerId
       });
       try {
         await enqueue(run.id);
@@ -36,27 +37,27 @@ export function createEvaluationService({ enqueue }) {
         await updateRunStatus(run.id, 'failed', `Could not enqueue evaluation: ${error.message}`);
         throw new HttpError(503, 'Could not enqueue evaluation. Check that Redis is running.');
       }
-      return getEvaluationById(run.id);
+      return getEvaluationById(run.id, ownerId);
     },
-    async list(limit = 50) {
-      return listEvaluations(limit);
+    async list(limit = 50, ownerId) {
+      return listEvaluations(limit, ownerId);
     },
-    async getById(id) {
-      const run = await getEvaluationWithResults(id);
+    async getById(id, ownerId) {
+      const run = await getEvaluationWithResults(id, ownerId);
       if (!run) throw new HttpError(404, 'Evaluation run not found');
       return run;
     },
-    async cancel(id) {
-      const run = await getEvaluationById(id);
+    async cancel(id, ownerId) {
+      const run = await getEvaluationById(id, ownerId);
       if (!run) throw new HttpError(404, 'Evaluation run not found');
       if (['completed', 'failed', 'cancelled'].includes(run.status)) {
         throw new HttpError(409, `Cannot cancel a run with status "${run.status}"`);
       }
-      await updateRunStatus(id, 'cancelled');
-      return getEvaluationById(id);
+      await updateRunStatus(id, 'cancelled', null, ownerId);
+      return getEvaluationById(id, ownerId);
     },
-    compare(baselineId, candidateId) {
-      return compareEvaluationRuns(baselineId, candidateId);
+    compare(baselineId, candidateId, ownerId) {
+      return compareEvaluationRuns(baselineId, candidateId, ownerId);
     }
   };
 }

@@ -37,7 +37,29 @@ try {
     client.release();
   }
 } catch (error) {
-  console.error('Database migration failed:', error.message);
+  console.error('Database migration failed.');
+
+  if (error instanceof Error) {
+    console.error(error.stack || error.message);
+
+    for (const key of [
+      'code',
+      'detail',
+      'hint',
+      'where',
+      'schema',
+      'table',
+      'column',
+      'constraint',
+    ]) {
+      if (error[key]) {
+        console.error(`${key}: ${error[key]}`);
+      }
+    }
+  } else {
+    console.error('Thrown value:', error);
+  }
+
   process.exitCode = 1;
 } finally {
   await closePool();

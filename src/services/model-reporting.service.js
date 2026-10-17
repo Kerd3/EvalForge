@@ -28,6 +28,84 @@ function resultFallbackUsed(result, metadata) {
   );
 }
 
+const REASON_LABELS = {
+  'provider-unavailable': 'temporarily unavailable',
+  'quota/rate-limit': 'rate-limited or quota-exhausted',
+  timeout: 'timed out'
+};
+
+/** Best-effort parse of legacy fallbackReason prose into structured attempts. */
+function parseLegacyFallbackReason(reason) {
+  if (typeof reason !== 'string' || !reason) return [];
+  const body = reason.includes('. ') ? reason.slice(reason.indexOf('. ') + 2) : '';
+  return body.split(' | ').map((part) => part.trim()).filter(Boolean).map((part) => {
+    const colon = part.indexOf(': ');
+    const model = colon > 0 ? part.slice(0, colon) : null;
+    const message = colon > 0 ? part.slice(colon + 2) : part;
+    const http = /\b(?:HTTP\s*)?(4\d\d|5\d\d)\b/.exec(message);
+    const until = /cooldown until (\d{4}-\d{2}-\d{2}T[\d:.]+Z)/.exec(message);
+    const skipped = /cooldown until/.test(message);
+    return {
+      model, outcome: skipped ? 'skipped_cooldown' : 'failed',
+      reason: /rate-limit|quota|429|RESOURCE_EXHAUSTED/i.test(message) ? 'quota/rate-limit'
+        : /timed? ?out|timeout/i.test(message) ? 'timeout'
+        : skipped ? (message.split(' cooldown')[0] || null) : 'provider-unavailable',
+      http_status: http ? Number(http[1]) : null,
+      message: skipped ? null : message.slice(0, 400),
+      cooldown_until: until ? until[1] : null
+    };
+  });
+}
+
+/**
+ * Condense repetitive per-case fallback text into one headline plus structured
+ * details. Nothing is dropped: every case keeps its attempts and the original
+ * prose is preserved in `raw_reason` for troubleshooting.
+ */
+export function buildFallbackSummary(run, results = []) {
+  const fallbackCases = [];
+  let respondedCases = 0;
+  for (const result of results) {
+    const metadata = metadataFor(result);
+    if (resolveActualModel(run, result, metadata) && ['passed', 'failed'].includes(result.status)) respondedCases += 1;
+    if (!resultFallbackUsed(result, metadata)) continue;
+    const attempts = Array.isArray(metadata.fallbackAttempts) && metadata.fallbackAttempts.length
+      ? metadata.fallbackAttempts : parseLegacyFallbackReason(metadata.fallbackReason);
+    fallbackCases.push({
+      test_case_id: result.test_case_id ?? null,
+      test_case_name: result.test_case_name ?? null,
+      requested_model: metadata.requestedModel || run.model || null,
+      actual_model: resolveActualModel(run, result, metadata),
+      attempts,
+      raw_reason: metadata.fallbackReason ?? null
+    });
+  }
+  if (!fallbackCases.length) return null;
+
+  const failedAttempts = fallbackCases.flatMap((item) => item.attempts.filter((a) => a.outcome === 'failed'));
+  const statuses = [...new Set(failedAttempts.map((a) => a.http_status).filter(Boolean))].sort();
+  const reasons = [...new Set(failedAttempts.map((a) => a.reason).filter(Boolean))];
+  const requested = [...new Set(fallbackCases.map((c) => c.requested_model).filter(Boolean))];
+  const actual = [...new Set(fallbackCases.map((c) => c.actual_model).filter(Boolean))];
+  const cooldowns = fallbackCases.flatMap((item) => item.attempts.map((a) => a.cooldown_until).filter(Boolean)).sort();
+  const reasonText = reasons.length === 1 ? (REASON_LABELS[reasons[0]] ?? reasons[0]) : reasons.length > 1 ? 'unavailable for mixed reasons' : 'unavailable';
+  const httpText = statuses.length ? ` (HTTP ${statuses.join('/')})` : '';
+  const requestedText = requested.length === 1 ? 'Requested model' : 'Requested models';
+  const total = respondedCases || fallbackCases.length;
+  return {
+    headline: `${requestedText} ${reasonText}${httpText}; fallback used for ${fallbackCases.length}/${total} cases.`,
+    fallback_cases: fallbackCases.length,
+    responded_cases: total,
+    requested_models: requested,
+    actual_models: actual,
+    http_statuses: statuses,
+    reasons,
+    first_cooldown_until: cooldowns[0] ?? null,
+    last_cooldown_until: cooldowns.length ? cooldowns[cooldowns.length - 1] : null,
+    cases: fallbackCases
+  };
+}
+
 function emptyModelGroup(model) {
   return {
     model,
@@ -37,6 +115,10 @@ function emptyModelGroup(model) {
     passed_cases: 0,
     failed_cases: 0,
     error_cases: 0,
+    provider_error_cases: 0,
+    evaluator_error_cases: 0,
+    model_failure_cases: 0,
+    unclassified_error_cases: 0,
     pending_cases: 0,
     answered_cases: 0,
     fallback_cases: 0,
@@ -59,9 +141,19 @@ function addStatusAndRouting(group, result, requestedModel, fallbackUsed, metada
   group.case_count += 1;
   group.requested_models.add(String(requestedModel || 'Not recorded'));
   if (result.status === 'passed') group.passed_cases += 1;
-  else if (result.status === 'failed') group.failed_cases += 1;
-  else if (result.status === 'error') group.error_cases += 1;
-  else group.pending_cases += 1;
+  else if (result.status === 'failed') {
+    group.failed_cases += 1;
+    // A response with no usable text/tool calls is stored as a graded failure
+    // with category model_failure; count it here so per-model totals match the
+    // run-level model_failure_cases figure.
+    if (result.failure_category === 'model_failure') group.model_failure_cases += 1;
+  } else if (result.status === 'error') {
+    group.error_cases += 1;
+    if (result.failure_category === 'provider_error') group.provider_error_cases += 1;
+    else if (result.failure_category === 'evaluator_error') group.evaluator_error_cases += 1;
+    else if (result.failure_category === 'model_failure') group.model_failure_cases += 1;
+    else group.unclassified_error_cases += 1;
+  } else group.pending_cases += 1;
   if (['passed', 'failed'].includes(result.status)) group.answered_cases += 1;
   if (fallbackUsed) group.fallback_cases += 1;
   if (Number.isFinite(Number(result.latency_ms)) && result.latency_ms !== null) group._latencies.push(Number(result.latency_ms));
@@ -251,11 +343,15 @@ export function buildModelReport(run, results = []) {
     total_cases: results.length,
     cases_with_model_response: answeredCases,
     cases_without_model_response: unassignedCases.case_count,
-    provider_error_cases: unassignedCases.error_cases,
+    provider_error_cases: results.filter((result) => result.status === 'error' && result.failure_category === 'provider_error').length,
+    evaluator_error_cases: results.filter((result) => result.status === 'error' && result.failure_category === 'evaluator_error').length,
+    model_failure_cases: results.filter((result) => result.failure_category === 'model_failure').length,
+    unclassified_error_cases: results.filter((result) => result.status === 'error' && !result.failure_category).length,
     pending_cases: unassignedCases.pending_cases,
     fallback_cases: fallbackCases,
     fallback_rate_percentage: answeredCases ? Number((fallbackCases / answeredCases * 100).toFixed(1)) : 0,
     fallback_reasons: [...fallbackReasons],
+    fallback_summary: buildFallbackSummary(run, results),
     models,
     unassigned_cases: unassignedCases,
     completed_model_responses: completedResponses,

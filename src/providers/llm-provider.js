@@ -252,13 +252,19 @@ export function mapGeminiResponse(payload = {}) {
   return {
     content,
     toolCalls,
-    usage: {
-      inputTokens: Number(payload.usageMetadata?.promptTokenCount ?? 0),
-      // Gemini reports thinking tokens separately; include them in total output
-      // usage because they are part of output-token consumption on thinking models.
-      outputTokens: Number(payload.usageMetadata?.candidatesTokenCount ?? 0)
-        + Number(payload.usageMetadata?.thoughtsTokenCount ?? 0)
-    },
+    // When usageMetadata (or its prompt count) is absent, report usage as null so
+    // downstream accounting records "unknown" instead of a fabricated zero.
+    usage: Number.isFinite(Number(payload.usageMetadata?.promptTokenCount))
+      && payload.usageMetadata?.promptTokenCount !== null
+      ? {
+        inputTokens: Number(payload.usageMetadata.promptTokenCount),
+        // Gemini reports thinking tokens separately; include them in total output
+        // usage because they are part of output-token consumption on thinking models.
+        // Gemini omits zero-valued fields, so an absent count here means zero.
+        outputTokens: Number(payload.usageMetadata.candidatesTokenCount ?? 0)
+          + Number(payload.usageMetadata.thoughtsTokenCount ?? 0)
+      }
+      : null,
     providerMetadata: {
       responseId: payload.responseId,
       finishReason: candidate?.finishReason,
@@ -407,6 +413,20 @@ export async function generateWithGeminiFallback({
       const fallbackReason = fallbackUsed
         ? `Switched from ${requestedModel} because a configured model timed out, was rate-limited/quota-exhausted, or temporarily unavailable. ${priorDetails.join(' | ')}`
         : null;
+      // Structured, additive copy of the same facts that fallbackReason prose
+      // describes, so the UI can summarize without parsing text.
+      const fallbackAttempts = fallbackUsed ? [
+        ...failures.map(({ model, error, cooldownUntil: until, reason }) => ({
+          model, outcome: 'failed', reason,
+          http_status: Number.isInteger(Number(error?.statusCode)) ? Number(error.statusCode) : null,
+          message: String(error?.message ?? '').slice(0, 400),
+          cooldown_until: new Date(until).toISOString()
+        })),
+        ...skipped.map(({ model, reason, cooldownUntil: until }) => ({
+          model, outcome: 'skipped_cooldown', reason, http_status: null, message: null,
+          cooldown_until: new Date(until).toISOString()
+        }))
+      ] : [];
       return {
         ...response,
         providerMetadata: {
@@ -414,7 +434,8 @@ export async function generateWithGeminiFallback({
           requestedModel,
           actualModel: candidate,
           fallbackUsed,
-          ...(fallbackReason ? { fallbackReason } : {})
+          ...(fallbackReason ? { fallbackReason } : {}),
+          ...(fallbackAttempts.length ? { fallbackAttempts } : {})
         }
       };
     } catch (error) {
@@ -590,10 +611,12 @@ export function createLlmProvider({ provider, model }) {
       return {
         content: typeof message?.content === 'string' ? message.content : '',
         toolCalls,
-        usage: {
-          inputTokens: Number(payload.usage?.prompt_tokens ?? 0),
-          outputTokens: Number(payload.usage?.completion_tokens ?? 0)
-        },
+        usage: Number.isFinite(Number(payload.usage?.prompt_tokens)) && payload.usage?.prompt_tokens !== null
+          ? {
+            inputTokens: Number(payload.usage.prompt_tokens),
+            outputTokens: Number(payload.usage.completion_tokens ?? 0)
+          }
+          : null,
         providerMetadata: {
           responseId: payload.id,
           finishReason: payload.choices?.[0]?.finish_reason,

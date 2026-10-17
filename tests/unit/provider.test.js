@@ -71,7 +71,7 @@ describe('Gemini response mapping', () => {
 
   it('handles an empty or blocked Gemini response without crashing', () => {
     expect(mapGeminiResponse({})).toMatchObject({
-      content: '', toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }
+      content: '', toolCalls: [], usage: null
     });
   });
 

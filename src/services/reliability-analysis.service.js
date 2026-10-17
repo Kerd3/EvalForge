@@ -186,10 +186,17 @@ export function buildReliabilityReport({ campaign, runs = [], results = [] }) {
     };
   });
 
+  const failureClassification = {
+    provider_errors: results.filter((result) => result.failure_category === 'provider_error').length,
+    evaluator_errors: results.filter((result) => result.failure_category === 'evaluator_error').length,
+    model_failures: results.filter((result) => result.failure_category === 'model_failure').length,
+    unclassified_legacy_errors: results.filter((result) => result.status === 'error' && !result.failure_category).length
+  };
+
   return {
-    campaign_id: campaign.id,
+    failure_classification: failureClassification,
     status: campaign.status,
-    planned_runs: Number(campaign.repeat_count),
+    planned_runs: Number(campaign.repeat_count ?? runs.length),
     completed_runs: completedRuns.length,
     failed_runs: runs.filter((run) => run.status === 'failed').length,
     cancelled_runs: runs.filter((run) => run.status === 'cancelled').length,

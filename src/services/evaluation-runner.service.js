@@ -15,6 +15,13 @@ function serializeInput(input) {
   return typeof input === 'string' ? input : JSON.stringify(input, null, 2);
 }
 
+/** True only when the provider returned finite numeric token counts. */
+export function usageWasReported(usage) {
+  return Boolean(usage) && typeof usage === 'object'
+    && Number.isFinite(Number(usage.inputTokens)) && usage.inputTokens !== null && usage.inputTokens !== undefined
+    && Number.isFinite(Number(usage.outputTokens)) && usage.outputTokens !== null && usage.outputTokens !== undefined;
+}
+
 export async function processEvaluationRun(runId) {
   const context = await getEvaluationContext(runId);
   if (!context) throw new Error(`Evaluation run ${runId} was not found`);
@@ -24,6 +31,27 @@ export async function processEvaluationRun(runId) {
   try {
     provider = createLlmProvider({ provider: context.run.provider, model: context.run.model });
   } catch (error) {
+    for (const testCase of context.cases) {
+      const existing = await getResult(runId, testCase.id);
+      if (existing && ['passed', 'failed', 'error'].includes(existing.status)) continue;
+      await saveEvaluationResult({
+        runId,
+        testCaseId: testCase.id,
+        status: 'error',
+        actualOutput: null,
+        toolCalls: [],
+        graders: [],
+        score: null,
+        latencyMs: null,
+        inputTokens: 0,
+        outputTokens: 0,
+        estimatedCostUsd: null,
+        errorMessage: error.message,
+        failureCategory: 'provider_error',
+        errorStage: 'provider_initialization',
+        trace: [{ type: 'case.error', at: new Date().toISOString(), stage: 'provider_initialization', message: error.message }]
+      });
+    }
     await updateRunStatus(runId, 'failed', error.message);
     return;
   }
@@ -48,9 +76,18 @@ export async function processEvaluationRun(runId) {
     await markResultStarted(runId, testCase.id);
     const startedAt = Date.now();
     const trace = [{ type: 'case.started', at: new Date().toISOString(), testCaseId: testCase.id }];
+    let errorStage = 'generation';
+    let failureCategory = 'provider_error';
 
     try {
       const response = await provider.generate({ testCase, systemPrompt: context.run.system_prompt });
+      if (!response || typeof response !== 'object') {
+        errorStage = 'model_response';
+        failureCategory = 'model_failure';
+        throw new Error('Provider returned an invalid model response envelope.');
+      }
+      errorStage = 'grading';
+      failureCategory = 'evaluator_error';
       let grade = gradeCase(testCase, response);
       const generationModel = response.providerMetadata?.actualModel
         ?? response.providerMetadata?.modelVersion
@@ -62,10 +99,13 @@ export async function processEvaluationRun(runId) {
         provider: context.run.provider,
         model: generationModel,
         inputTokens: Number(response.usage?.inputTokens ?? 0),
-        outputTokens: Number(response.usage?.outputTokens ?? 0)
+        outputTokens: Number(response.usage?.outputTokens ?? 0),
+        usageReported: usageWasReported(response.usage)
       }];
       const judgeConfig = testCase.grading_rules ?? {};
       if (judgeConfig.judgeEnabled === true && typeof provider.judge === 'function') {
+        errorStage = 'llm_judge';
+        failureCategory = 'provider_error';
         const judgeResult = await provider.judge({
           testCase,
           response,
@@ -83,9 +123,12 @@ export async function processEvaluationRun(runId) {
             provider: context.run.provider,
             model: judgeModel,
             inputTokens: Number(judgeResult.usage?.inputTokens ?? 0),
-            outputTokens: Number(judgeResult.usage?.outputTokens ?? 0)
+            outputTokens: Number(judgeResult.usage?.outputTokens ?? 0),
+            usageReported: usageWasReported(judgeResult.usage)
           });
         }
+        errorStage = 'grading';
+        failureCategory = 'evaluator_error';
         grade = {
           ...grade,
           passed: grade.passed && judgeResult.passed,
@@ -100,10 +143,23 @@ export async function processEvaluationRun(runId) {
       const outputTokens = usageCalls.reduce((sum, call) => sum + call.outputTokens, 0);
       const latencyMs = Date.now() - startedAt;
       const actualModel = generationModel;
-      const costCalls = usageCalls.map((call) => ({
-        ...call,
-        ...estimateCostDetails({ provider: call.provider, model: call.model, inputTokens: call.inputTokens, outputTokens: call.outputTokens })
-      }));
+      const costCalls = usageCalls.map((call) => {
+        // Never turn "usage not reported" into a real-looking $0. The Mock
+        // provider is exempt: it makes no billable calls.
+        if (call.usageReported === false && call.provider !== 'mock') {
+          return {
+            ...call,
+            pricingStatus: 'unavailable',
+            estimatedCostUsd: null,
+            rateSource: null,
+            explanation: `Estimated cost unavailable: the provider did not report token usage for this ${call.operation} call, so cost was not recorded as zero.`
+          };
+        }
+        return {
+          ...call,
+          ...estimateCostDetails({ provider: call.provider, model: call.model, inputTokens: call.inputTokens, outputTokens: call.outputTokens })
+        };
+      });
       const unavailableCostCalls = costCalls.filter((call) => call.pricingStatus === 'unavailable');
       const pricedCostCalls = costCalls.filter((call) =>
         ['estimated', 'not_applicable'].includes(call.pricingStatus)
@@ -145,19 +201,30 @@ export async function processEvaluationRun(runId) {
       }
       trace.push({ type: 'grading.completed', at: new Date().toISOString(), score: grade.score, passed: grade.passed });
 
+      errorStage = 'result_persistence';
+      failureCategory = 'evaluator_error';
+      const hasUsableOutput = (typeof response.content === 'string' && response.content.trim().length > 0)
+        || (Array.isArray(response.toolCalls) && response.toolCalls.length > 0);
       await saveEvaluationResult({
         runId, testCaseId: testCase.id, status: grade.passed ? 'passed' : 'failed',
         actualOutput: { content: response.content, toolCalls: response.toolCalls, providerMetadata },
         toolCalls: response.toolCalls, graders: grade.graders, score: grade.score, latencyMs,
-        inputTokens, outputTokens, estimatedCostUsd, errorMessage: null, trace
+        inputTokens, outputTokens, estimatedCostUsd,
+        errorMessage: hasUsableOutput ? null : 'The model returned no usable text or proposed tool calls.',
+        failureCategory: hasUsableOutput ? null : 'model_failure',
+        errorStage: hasUsableOutput ? null : 'model_response',
+        trace
       });
     } catch (error) {
       const latencyMs = Date.now() - startedAt;
       trace.push({ type: 'case.error', at: new Date().toISOString(), message: error.message });
+      const isModelFailure = failureCategory === 'model_failure';
       await saveEvaluationResult({
-        runId, testCaseId: testCase.id, status: 'error', actualOutput: null,
-        toolCalls: [], graders: [], score: null, latencyMs, inputTokens: 0,
-        outputTokens: 0, estimatedCostUsd: null, errorMessage: error.message, trace
+        runId, testCaseId: testCase.id, status: isModelFailure ? 'failed' : 'error', actualOutput: null,
+        toolCalls: [],
+        graders: isModelFailure ? [{ name: 'model_response', passed: false, score: 0, details: error.message }] : [],
+        score: isModelFailure ? 0 : null, latencyMs, inputTokens: 0,
+        outputTokens: 0, estimatedCostUsd: null, errorMessage: error.message, failureCategory, errorStage, trace
       });
     }
   }

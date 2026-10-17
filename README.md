@@ -118,6 +118,8 @@ docker compose up --build -d
 
 Open **http://localhost:3000**. The Compose setup starts PostgreSQL, Redis, the API, the background worker, and the migration/seed workflow. For a no-key demo, leave the provider set to **Mock provider** and use the seeded **EvalForge Demo: Support Agent Reliability** dataset.
 
+The application requires an account. Copy `.env.example` to `.env` before startup (for example, `Copy-Item .env.example .env` in PowerShell). Registration is enabled by that local example for initial setup. If the database contains v1.0 datasets or runs, set a strong `EVALFORGE_BOOTSTRAP_SECRET`; the first account must provide it to claim those existing records. After creating the intended accounts, set `EVALFORGE_REGISTRATION_ENABLED=false` and restart. Cookies use `HttpOnly` and `SameSite=Lax`; `AUTH_COOKIE_SECURE` is false for local HTTP and must be true behind HTTPS. Compose publishes the API, PostgreSQL, and Redis on loopback only by default. Forwarded client IPs are ignored unless `TRUST_PROXY_HOPS` is set to the exact trusted proxy count; configure proxies to overwrite or safely append forwarded headers.
+
 To follow logs:
 
 ```bash
@@ -205,7 +207,7 @@ During project validation, the following results were observed:
 
 | Check | Result |
 |---|---|
-| Local automated suite | **69 tests passed across 9 files** |
+| Local automated suite | **91 tests passed across 13 files** |
 | Dedicated regression suite | **7 tests passed across 2 files** (included in the full suite) |
 | Live Policy Grounding evaluation | **12/12 passed** with `gemini-3.1-flash-lite` in a single-model run |
 | Policy Grounding reliability campaign | **3 of 3 repeats at 100%**, with zero run-to-run standard deviation on this 12-case dataset |
@@ -249,6 +251,10 @@ All successful responses use a `{ "data": ... }` envelope. Errors use an `{ "err
 
 | Method | Endpoint | Purpose |
 |---|---|---|
+| `POST` | `/api/auth/register` | Create an account (when registration is enabled); returns an HttpOnly session cookie |
+| `POST` | `/api/auth/login` | Sign in and set an HttpOnly session cookie |
+| `POST` | `/api/auth/logout` | Revoke the server-side session and expire the cookie |
+| `GET` | `/api/auth/me` | Return the current account and account-setup state |
 | `GET` | `/api/health` | API, database, and queue health |
 | `GET` | `/api/datasets` | List datasets and latest version metadata |
 | `POST` | `/api/datasets` | Create a dataset and its first version |
@@ -265,7 +271,7 @@ All successful responses use a `{ "data": ... }` envelope. Errors use an `{ "err
 
 ## Current MVP boundaries
 
-- Authentication, per-user permissions, run ownership, and multi-tenant isolation are not implemented. Do not expose an unprotected instance publicly with real user data or secrets.
+- Accounts and server-side sessions protect dataset, run, and campaign routes. Existing database records remain unowned after migration until the first account claims them with the configured bootstrap secret. This app has not had an independent production penetration test; keep the self-hosted instance behind HTTPS and restrict network access.
 - Gemini/OpenAI model IDs, availability, limits, and prices may change; check provider documentation and your own account settings.
 - Live-model outputs can vary. Keyword and abstention graders need representative cases and careful calibration.
 - Fallback can produce mixed-model runs. Check actual model IDs before comparing quality across runs.
@@ -284,3 +290,8 @@ All successful responses use a `{ "data": ... }` envelope. Errors use an `{ "err
 ---
 
 **EvalForge** — AI evaluation is a measurement practice, not a guarantee of correctness.
+
+
+## Evaluation quality (Phase 2)
+
+EvalForge supports labeled, versioned grader-calibration examples, explicit semantic equivalents for exact-match grading, paired baseline/candidate comparison with uncertainty estimates, and distinct provider/evaluator/model failure reporting. See [Evaluation Quality](docs/EVALUATION-QUALITY.md) and the importable [golden calibration dataset](examples/golden-grading-dataset.v1.json). After updating an existing database, run `npm run db:migrate`; then run `npm test` and `npm run test:regression`.
