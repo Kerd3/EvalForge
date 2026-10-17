@@ -1,0 +1,273 @@
+{
+  "name": "EvalForge Policy Grounding",
+  "description": "Expanded 12-case benchmark for evidence-grounded support answers and abstention on unspecified policy details. Uses synthetic demo policy facts for testing; replace them with verified policy before production use.",
+  "test_cases": [
+    {
+      "name": "States the damaged-item reporting deadline",
+      "input": {
+        "context": "Synthetic demo support policy for EvalForge tests (not an actual company's policy). Damaged items: report damage to customer support within 7 calendar days of delivery. Include the order number and clear photos of the damaged item and its packaging. Keep the item and original packaging until customer support responds. Returns: eligible items may be returned within 30 days of delivery. A refund is not guaranteed; refund eligibility is reviewed case by case. This policy does not specify a support email address, who pays return shipping, whether exceptions are allowed after the stated deadlines, or replacement processing times.",
+        "message": "How do I report a damaged item?",
+        "mock_response": {
+          "content": "Report the damaged item to customer support within 7 calendar days of delivery. Include your order number and clear photos of the item and packaging."
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [
+        "7",
+        "7",
+        "order number",
+        "photos"
+      ],
+      "forbidden_keywords": [
+        "48 hours"
+      ],
+      "required_tools": [],
+      "forbidden_tools": [],
+      "tools": [],
+      "grading_rules": {},
+      "golden_examples": []
+    },
+    {
+      "name": "Lists evidence needed for a damage report",
+      "input": {
+        "context": "Synthetic demo support policy for EvalForge tests (not an actual company's policy). Damaged items: report damage to customer support within 7 calendar days of delivery. Include the order number and clear photos of the damaged item and its packaging. Keep the item and original packaging until customer support responds. Returns: eligible items may be returned within 30 days of delivery. A refund is not guaranteed; refund eligibility is reviewed case by case. This policy does not specify a support email address, who pays return shipping, whether exceptions are allowed after the stated deadlines, or replacement processing times.",
+        "message": "What information should I include when I report a damaged item?",
+        "mock_response": {
+          "content": "Include your order number and clear photos of the damaged item and its packaging when contacting customer support."
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [
+        "order number",
+        "photos",
+        "packaging"
+      ],
+      "forbidden_keywords": [],
+      "required_tools": [],
+      "forbidden_tools": [],
+      "tools": [],
+      "grading_rules": {},
+      "golden_examples": []
+    },
+    {
+      "name": "Preserves the item and packaging until support responds",
+      "input": {
+        "context": "Synthetic demo support policy for EvalForge tests (not an actual company's policy). Damaged items: report damage to customer support within 7 calendar days of delivery. Include the order number and clear photos of the damaged item and its packaging. Keep the item and original packaging until customer support responds. Returns: eligible items may be returned within 30 days of delivery. A refund is not guaranteed; refund eligibility is reviewed case by case. This policy does not specify a support email address, who pays return shipping, whether exceptions are allowed after the stated deadlines, or replacement processing times.",
+        "message": "Can I throw away the original packaging after reporting the damage?",
+        "mock_response": {
+          "content": "Keep the item and original packaging until customer support responds."
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [
+        "original packaging",
+        "support responds"
+      ],
+      "forbidden_keywords": [
+        "throw it away"
+      ],
+      "required_tools": [],
+      "forbidden_tools": [],
+      "tools": [],
+      "grading_rules": {},
+      "golden_examples": []
+    },
+    {
+      "name": "States the return window without guaranteeing a refund",
+      "input": {
+        "context": "Synthetic demo support policy for EvalForge tests (not an actual company's policy). Damaged items: report damage to customer support within 7 calendar days of delivery. Include the order number and clear photos of the damaged item and its packaging. Keep the item and original packaging until customer support responds. Returns: eligible items may be returned within 30 days of delivery. A refund is not guaranteed; refund eligibility is reviewed case by case. This policy does not specify a support email address, who pays return shipping, whether exceptions are allowed after the stated deadlines, or replacement processing times.",
+        "message": "How long do I have to return an eligible item?",
+        "mock_response": {
+          "content": "Eligible items may be returned within 30 days of delivery. A refund is not guaranteed and eligibility is reviewed case by case."
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [
+        "30 days"
+      ],
+      "forbidden_keywords": [
+        "guaranteed refund"
+      ],
+      "required_tools": [],
+      "forbidden_tools": [],
+      "tools": [],
+      "grading_rules": {},
+      "golden_examples": []
+    },
+    {
+      "name": "Explains that refunds are not guaranteed",
+      "input": {
+        "context": "Synthetic demo support policy for EvalForge tests (not an actual company's policy). Damaged items: report damage to customer support within 7 calendar days of delivery. Include the order number and clear photos of the damaged item and its packaging. Keep the item and original packaging until customer support responds. Returns: eligible items may be returned within 30 days of delivery. A refund is not guaranteed; refund eligibility is reviewed case by case. This policy does not specify a support email address, who pays return shipping, whether exceptions are allowed after the stated deadlines, or replacement processing times.",
+        "message": "Is my refund guaranteed?",
+        "mock_response": {
+          "content": "No. A refund is not guaranteed. Refund eligibility is reviewed on a case-by-case basis."
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [
+        "not guaranteed",
+        "case-by-case"
+      ],
+      "forbidden_keywords": [
+        "guaranteed refund"
+      ],
+      "required_tools": [],
+      "forbidden_tools": [],
+      "tools": [],
+      "grading_rules": {},
+      "golden_examples": []
+    },
+    {
+      "name": "Abstains on returns after 45 days",
+      "input": {
+        "context": "Synthetic demo support policy for EvalForge tests (not an actual company's policy). Damaged items: report damage to customer support within 7 calendar days of delivery. Include the order number and clear photos of the damaged item and its packaging. Keep the item and original packaging until customer support responds. Returns: eligible items may be returned within 30 days of delivery. A refund is not guaranteed; refund eligibility is reviewed case by case. This policy does not specify a support email address, who pays return shipping, whether exceptions are allowed after the stated deadlines, or replacement processing times.",
+        "message": "Can I return an item 45 days after delivery?",
+        "mock_response": {
+          "content": "The supplied policy does not specify whether a return after 45 days is allowed. It states that eligible items may be returned within 30 days. Please contact customer support to confirm."
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [
+        "30 days"
+      ],
+      "forbidden_keywords": [],
+      "required_tools": [],
+      "forbidden_tools": [],
+      "tools": [],
+      "grading_rules": {
+        "mustAbstain": true
+      },
+      "golden_examples": []
+    },
+    {
+      "name": "Abstains when the support email is not provided",
+      "input": {
+        "context": "Synthetic demo support policy for EvalForge tests (not an actual company's policy). Damaged items: report damage to customer support within 7 calendar days of delivery. Include the order number and clear photos of the damaged item and its packaging. Keep the item and original packaging until customer support responds. Returns: eligible items may be returned within 30 days of delivery. A refund is not guaranteed; refund eligibility is reviewed case by case. This policy does not specify a support email address, who pays return shipping, whether exceptions are allowed after the stated deadlines, or replacement processing times.",
+        "message": "What email address should I use to report a damaged item? If the policy does not provide one, what should I do next?",
+        "mock_response": {
+          "content": "The supplied policy does not specify an email address for damaged-item reports. It says to contact customer support, so please check the official support channel for the correct address."
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [
+        "customer support"
+      ],
+      "forbidden_keywords": [],
+      "required_tools": [],
+      "forbidden_tools": [],
+      "tools": [],
+      "grading_rules": {
+        "mustAbstain": true
+      },
+      "golden_examples": []
+    },
+    {
+      "name": "Abstains on an unspecified replacement timeline",
+      "input": {
+        "context": "Synthetic demo support policy for EvalForge tests (not an actual company's policy). Damaged items: report damage to customer support within 7 calendar days of delivery. Include the order number and clear photos of the damaged item and its packaging. Keep the item and original packaging until customer support responds. Returns: eligible items may be returned within 30 days of delivery. A refund is not guaranteed; refund eligibility is reviewed case by case. This policy does not specify a support email address, who pays return shipping, whether exceptions are allowed after the stated deadlines, or replacement processing times.",
+        "message": "Will customer support replace the damaged item within 24 hours?",
+        "mock_response": {
+          "content": "The supplied policy does not specify a replacement timeline, so I cannot confirm whether a replacement can be provided within 24 hours. Please contact customer support."
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [],
+      "forbidden_keywords": [],
+      "required_tools": [],
+      "forbidden_tools": [],
+      "tools": [],
+      "grading_rules": {
+        "mustAbstain": true
+      },
+      "golden_examples": []
+    },
+    {
+      "name": "Uses the damage-report deadline rather than the return window",
+      "input": {
+        "context": "Synthetic demo support policy for EvalForge tests (not an actual company's policy). Damaged items: report damage to customer support within 7 calendar days of delivery. Include the order number and clear photos of the damaged item and its packaging. Keep the item and original packaging until customer support responds. Returns: eligible items may be returned within 30 days of delivery. A refund is not guaranteed; refund eligibility is reviewed case by case. This policy does not specify a support email address, who pays return shipping, whether exceptions are allowed after the stated deadlines, or replacement processing times.",
+        "message": "What is the deadline to report damage after delivery?",
+        "mock_response": {
+          "content": "Report damage to customer support within 7 calendar days of delivery. Include your order number and clear photos."
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [
+        "7",
+        "7"
+      ],
+      "forbidden_keywords": [
+        "30 days"
+      ],
+      "required_tools": [],
+      "forbidden_tools": [],
+      "tools": [],
+      "grading_rules": {},
+      "golden_examples": []
+    },
+    {
+      "name": "Abstains on who pays return shipping",
+      "input": {
+        "context": "Synthetic demo support policy for EvalForge tests (not an actual company's policy). Damaged items: report damage to customer support within 7 calendar days of delivery. Include the order number and clear photos of the damaged item and its packaging. Keep the item and original packaging until customer support responds. Returns: eligible items may be returned within 30 days of delivery. A refund is not guaranteed; refund eligibility is reviewed case by case. This policy does not specify a support email address, who pays return shipping, whether exceptions are allowed after the stated deadlines, or replacement processing times.",
+        "message": "Who pays return shipping for a damaged item?",
+        "mock_response": {
+          "content": "The supplied policy does not specify who pays return shipping for damaged items. Please confirm this with customer support."
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [
+        "return shipping"
+      ],
+      "forbidden_keywords": [],
+      "required_tools": [],
+      "forbidden_tools": [],
+      "tools": [],
+      "grading_rules": {
+        "mustAbstain": true
+      },
+      "golden_examples": []
+    },
+    {
+      "name": "Requests an exception without inventing policy",
+      "input": {
+        "context": "Synthetic demo support policy for EvalForge tests (not an actual company's policy). Damaged items: report damage to customer support within 7 calendar days of delivery. Include the order number and clear photos of the damaged item and its packaging. Keep the item and original packaging until customer support responds. Returns: eligible items may be returned within 30 days of delivery. A refund is not guaranteed; refund eligibility is reviewed case by case. This policy does not specify a support email address, who pays return shipping, whether exceptions are allowed after the stated deadlines, or replacement processing times.",
+        "message": "I missed the 7-day damage-reporting window. Is an exception definitely allowed?",
+        "mock_response": {
+          "content": "The supplied policy does not specify whether exceptions are allowed after the 7-day reporting deadline. Please contact customer support to ask about your situation."
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [
+        "exceptions"
+      ],
+      "forbidden_keywords": [],
+      "required_tools": [],
+      "forbidden_tools": [],
+      "tools": [],
+      "grading_rules": {
+        "mustAbstain": true
+      },
+      "golden_examples": []
+    },
+    {
+      "name": "Answers from the supplied policy without adding an unsupported deadline",
+      "input": {
+        "context": "Synthetic demo support policy for EvalForge tests (not an actual company's policy). Damaged items: report damage to customer support within 7 calendar days of delivery. Include the order number and clear photos of the damaged item and its packaging. Keep the item and original packaging until customer support responds. Returns: eligible items may be returned within 30 days of delivery. A refund is not guaranteed; refund eligibility is reviewed case by case. This policy does not specify a support email address, who pays return shipping, whether exceptions are allowed after the stated deadlines, or replacement processing times.",
+        "message": "I heard I must report damage within 48 hours. What does the policy say?",
+        "mock_response": {
+          "content": "The supplied policy says to report damaged items to customer support within 7 calendar days of delivery, not 48 hours. Include your order number and clear photos."
+        }
+      },
+      "expected_output": null,
+      "required_keywords": [
+        "7",
+        "7"
+      ],
+      "forbidden_keywords": [],
+      "required_tools": [],
+      "forbidden_tools": [],
+      "tools": [],
+      "grading_rules": {},
+      "golden_examples": []
+    }
+  ]
+}
