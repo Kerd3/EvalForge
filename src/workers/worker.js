@@ -1,5 +1,7 @@
 import { Worker } from 'bullmq';
 import { createRedisConnection } from '../db/redis.js';
+import { createRedisCooldownStore } from '../providers/redis-cooldown-store.js';
+import { configureGeminiCooldownStore } from '../providers/llm-provider.js';
 import { closePool } from '../db/pool.js';
 import { env } from '../config/env.js';
 import { EVALUATION_QUEUE_NAME } from '../queues/constants.js';
@@ -8,6 +10,8 @@ import { processEvaluationCampaign } from '../services/evaluation-campaign-runne
 import { failEvaluationCampaign, updateRunStatus } from '../repositories/evaluations.repository.js';
 
 const connection = createRedisConnection();
+const cooldownConnection = createRedisConnection();
+configureGeminiCooldownStore(createRedisCooldownStore(cooldownConnection));
 const worker = new Worker(
   EVALUATION_QUEUE_NAME,
   async (job) => {
@@ -45,6 +49,7 @@ async function shutdown(signal) {
   console.log(`Received ${signal}; shutting down worker.`);
   await worker.close();
   await connection.quit();
+  await cooldownConnection.quit();
   await closePool();
   process.exit(0);
 }

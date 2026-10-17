@@ -359,7 +359,7 @@ export async function getEvaluationCampaignById(campaignId, ownerId = null) {
   return { ...campaign, runs, reliability: buildReliabilityReport({ campaign, runs, results }) };
 }
 
-export async function listEvaluations(limit = 50, ownerId = null) {
+export async function listEvaluations(limit = 50, ownerId = null, cursor = null) {
   const { rows } = await pool.query(
     `SELECT r.*, c.repeat_count AS campaign_repeat_count, v.version_number, d.id AS dataset_id, d.name AS dataset_name,
        model_summary.actual_model_names,
@@ -391,9 +391,17 @@ export async function listEvaluations(limit = 50, ownerId = null) {
        ) detected_models
      ) model_summary ON TRUE
      WHERE ($2::uuid IS NULL OR r.owner_id = $2)
-     ORDER BY r.created_at DESC LIMIT $1`, [limit, ownerId]
+       AND ($3::timestamptz IS NULL OR (r.created_at, r.id) < ($3::timestamptz, $4::uuid))
+     ORDER BY r.created_at DESC, r.id DESC LIMIT $1`, [limit + 1, ownerId, cursor?.createdAt ?? null, cursor?.id ?? null]
   );
-  return rows;
+  const hasMore = rows.length > limit;
+  const items = hasMore ? rows.slice(0, limit) : rows;
+  const last = items.at(-1);
+  return {
+    items,
+    hasMore,
+    nextCursor: hasMore && last ? { createdAt: new Date(last.created_at).toISOString(), id: last.id } : null
+  };
 }
 
 export async function getEvaluationById(runId, ownerId = null) {

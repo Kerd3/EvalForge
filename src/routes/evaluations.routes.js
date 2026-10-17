@@ -3,6 +3,21 @@ import { z } from 'zod';
 import { createEvaluationSchema, compareSchema, createRecordedEvaluationSchema } from '../validators/evaluation.schema.js';
 import { HttpError } from '../middleware/error-handler.js';
 
+const runCursorSchema = z.object({ createdAt: z.string().datetime({ offset: true }), id: z.string().uuid() }).strict();
+
+function decodeRunCursor(value) {
+  if (value === undefined) return null;
+  if (typeof value !== 'string' || value.length > 512 || !/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw new HttpError(400, 'cursor must be a valid evaluation cursor');
+  }
+  let decoded;
+  try { decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')); }
+  catch { throw new HttpError(400, 'cursor must be a valid evaluation cursor'); }
+  const parsed = runCursorSchema.safeParse(decoded);
+  if (!parsed.success) throw new HttpError(400, 'cursor must be a valid evaluation cursor');
+  return { createdAt: parsed.data.createdAt, id: parsed.data.id };
+}
+
 export function createEvaluationsRouter({ evaluationService }) {
   const router = Router();
 
@@ -12,7 +27,15 @@ export function createEvaluationsRouter({ evaluationService }) {
       if (!Number.isInteger(rawLimit) || rawLimit < 1 || rawLimit > 100) {
         throw new HttpError(400, 'limit must be an integer between 1 and 100');
       }
-      res.json({ data: await evaluationService.list(rawLimit, req.user.id) });
+      const cursor = decodeRunCursor(req.query.cursor);
+      const page = await evaluationService.list(rawLimit, req.user.id, cursor);
+      res.json({
+        data: page.items,
+        pagination: {
+          has_more: page.hasMore,
+          next_cursor: page.nextCursor ? Buffer.from(JSON.stringify(page.nextCursor)).toString('base64url') : null
+        }
+      });
     } catch (error) { next(error); }
   });
 

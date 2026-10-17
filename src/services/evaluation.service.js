@@ -57,8 +57,8 @@ export function createEvaluationService({ enqueue }) {
         validateTrace: validateAgentTrace
       });
     },
-    async list(limit = 50, ownerId) {
-      return listEvaluations(limit, ownerId);
+    async list(limit = 50, ownerId, cursor = null) {
+      return listEvaluations(limit, ownerId, cursor);
     },
     async getById(id, ownerId) {
       const run = await getEvaluationWithResults(id, ownerId);

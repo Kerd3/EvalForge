@@ -3,6 +3,9 @@ const state = {
   runs: [],
   runsPage: 1,
   runsPageSize: 10,
+  runsPageCursors: [null],
+  runsHasMore: false,
+  runsNextCursor: null,
   selectedRun: null,
   selectedCampaignId: null,
   selectedCampaign: null,
@@ -172,7 +175,7 @@ async function api(url, options = {}) {
     }
     throw new Error(body?.error?.message ?? `Request failed (${response.status})`);
   }
-  return body.data;
+  return body.pagination ? { data: body.data, pagination: body.pagination } : body.data;
 }
 
 function showToast(message, kind = 'success') {
@@ -203,13 +206,22 @@ async function refreshHealth() {
   }
 }
 
-async function refreshAll({ quiet = false } = {}) {
+async function refreshAll({ quiet = false, resetRuns = false } = {}) {
   try {
-    const [datasets, runs] = await Promise.all([api('/api/datasets'), api('/api/evaluations?limit=100')]);
+    if (resetRuns) { state.runsPage = 1; state.runsPageCursors = [null]; }
+    const cursor = state.runsPageCursors[state.runsPage - 1] ?? null;
+    const runsUrl = new URL('/api/evaluations', window.location.origin);
+    runsUrl.searchParams.set('limit', String(state.runsPageSize));
+    if (cursor) runsUrl.searchParams.set('cursor', cursor);
+    const [datasets, runPage] = await Promise.all([api('/api/datasets'), api(`${runsUrl.pathname}${runsUrl.search}`)]);
     const previousLatestRunId = state.runs[0]?.id ?? null;
     state.datasets = datasets;
-    state.runs = runs;
-    if (runs[0]?.id && runs[0].id !== previousLatestRunId) state.runsPage = 1;
+    state.runs = runPage.data;
+    state.runsHasMore = runPage.pagination.has_more;
+    state.runsNextCursor = runPage.pagination.next_cursor;
+    if (state.runsPage === 1 && state.runs[0]?.id && state.runs[0].id !== previousLatestRunId) {
+      state.runsPageCursors = [null];
+    }
     renderDatasets();
     renderRuns();
     renderMetrics();
@@ -224,9 +236,11 @@ async function refreshAll({ quiet = false } = {}) {
     } else if (state.selectedCampaignId) {
       await openCampaignDetails(state.selectedCampaignId, { quiet: true });
     }
+    return true;
   } catch (error) {
     if (!quiet) showToast(error.message, 'error');
     $('#engine-status').textContent = 'Could not load workspace';
+    return false;
   }
 }
 
@@ -256,7 +270,27 @@ function renderMetrics() {
   $('#metric-latency').innerHTML = averageLatency === null ? '—<small>ms</small>' : `${number(averageLatency)}<small>ms</small>`;
 }
 
-function renderRunsPagination(totalRuns, totalPages) {
+async function changeRunsPage(direction) {
+  if (direction < 0 && state.runsPage <= 1) return;
+  if (direction > 0 && (!state.runsHasMore || !state.runsNextCursor)) return;
+  const previousPage = state.runsPage;
+  const previousCursors = [...state.runsPageCursors];
+  if (direction < 0) {
+    state.runsPage -= 1;
+    state.runsPageCursors.pop();
+  } else {
+    state.runsPageCursors.push(state.runsNextCursor);
+    state.runsPage += 1;
+  }
+  const loaded = await refreshAll({ quiet: true });
+  if (!loaded) {
+    state.runsPage = previousPage;
+    state.runsPageCursors = previousCursors;
+    await refreshAll({ quiet: true });
+  }
+}
+
+function renderRunsPagination() {
   const footer = $('.table-footer');
   if (!footer) return;
 
@@ -269,53 +303,33 @@ function renderRunsPagination(totalRuns, totalPages) {
     footer.insertAdjacentElement('afterend', container);
   }
 
-  if (totalRuns === 0 || totalPages <= 1) {
+  if (!state.runs.length && state.runsPage === 1 || state.runsPage === 1 && !state.runsHasMore) {
     container.hidden = true;
     container.innerHTML = '';
     return;
   }
 
   container.hidden = false;
-  const currentPage = Number(state.runsPage) || 1;
-  const pageButtons = Array.from({ length: totalPages }, (_, index) => {
-    const page = index + 1;
-    const current = page === currentPage;
-    return       `<button type="button" class="run-page-button${current ? ' active' : ''}" data-run-page="${page}" aria-label="Go to page ${page}" ${current ? 'aria-current="page"' : ''}>${page}</button>`;
-  }).join('');
-
-  container.innerHTML =     `<div class="runs-pagination-controls">
-      <button type="button" class="run-page-button run-page-step" data-run-page="${currentPage - 1}" ${currentPage <= 1 ? 'disabled' : ''}>← Previous</button>
-      <div class="run-page-numbers">${pageButtons}</div>
-      <button type="button" class="run-page-button run-page-step" data-run-page="${currentPage + 1}" ${currentPage >= totalPages ? 'disabled' : ''}>Next →</button>
-    </div>`;
-
-  container.querySelectorAll('button[data-run-page]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const nextPage = Number(button.dataset.runPage);
-      if (!Number.isInteger(nextPage) || nextPage < 1 || nextPage > totalPages || nextPage === currentPage) return;
-      state.runsPage = nextPage;
-      renderRuns();
-    });
+  container.innerHTML = `<div class="runs-pagination-controls">
+    <button type="button" class="run-page-button run-page-step" data-run-direction="-1" ${state.runsPage <= 1 ? 'disabled' : ''}>← Previous</button>
+    <span class="run-page-label" aria-live="polite">Page ${number(state.runsPage)}</span>
+    <button type="button" class="run-page-button run-page-step" data-run-direction="1" ${state.runsHasMore ? '' : 'disabled'}>Next →</button>
+  </div>`;
+  container.querySelectorAll('button[data-run-direction]').forEach((button) => {
+    button.addEventListener('click', () => changeRunsPage(Number(button.dataset.runDirection)));
   });
 }
 
 function renderRuns() {
   const tbody = $('#runs-table-body');
-  const pageSize = Number(state.runsPageSize) || 10;
   const totalRunCount = state.runs.length;
-  const totalRunPages = Math.max(1, Math.ceil(totalRunCount / pageSize));
-  state.runsPage = Math.min(Math.max(1, Number(state.runsPage) || 1), totalRunPages);
-  const runPageStart = totalRunCount ? (state.runsPage - 1) * pageSize : 0;
-  const visibleRuns = state.runs.slice(runPageStart, runPageStart + pageSize);
-  const firstVisibleRun = totalRunCount ? runPageStart + 1 : 0;
-  const lastVisibleRun = Math.min(runPageStart + pageSize, totalRunCount);
   $('#runs-count').textContent = totalRunCount
-    ? `Showing ${firstVisibleRun}–${lastVisibleRun} of ${totalRunCount} runs`
+    ? `Page ${number(state.runsPage)} · ${number(totalRunCount)} runs${state.runsHasMore ? ' · more available' : ''}`
     : 'Showing 0 runs';
   if (!state.runs.length) {
     tbody.innerHTML = '<tr><td colspan="5" class="empty-cell">No evaluation runs yet. Start your first run above.</td></tr>';
   } else {
-    tbody.innerHTML = visibleRuns.map((run) => {
+    tbody.innerHTML = state.runs.map((run) => {
       const rate = runPassRate(run);
       const metric = run.status === 'running' || run.status === 'queued'
         ? `${number(run.completed_cases)}/${number(run.total_cases)}`
@@ -344,7 +358,7 @@ function renderRuns() {
     }).join('');
   }
   renderCompareBar();
-  renderRunsPagination(totalRunCount, totalRunPages);
+  renderRunsPagination();
 }
 
 function renderDatasets() {
@@ -730,7 +744,7 @@ $('#run-form').addEventListener('submit', async (event) => {
       const run = await api('/api/evaluations', { method: 'POST', body: JSON.stringify(payload) });
       setMessage('#run-form-message', `Evaluation queued: ${run.id}`, 'success');
       showToast('Evaluation run queued successfully.');
-      await refreshAll({ quiet: true });
+      await refreshAll({ quiet: true, resetRuns: true });
       await openRunDetails(run.id);
     } else {
       const campaign = await api('/api/evaluation-campaigns', {
@@ -738,7 +752,7 @@ $('#run-form').addEventListener('submit', async (event) => {
       });
       setMessage('#run-form-message', `Reliability campaign queued: ${campaign.id} (${repeatCount} repeats)`, 'success');
       showToast(`Reliability campaign queued with ${repeatCount} repetitions.`);
-      await refreshAll({ quiet: true });
+      await refreshAll({ quiet: true, resetRuns: true });
       await openCampaignDetails(campaign.id);
     }
   } catch (error) {
@@ -807,8 +821,8 @@ $('#cancel-dataset-edit-button').addEventListener('click', () => {
 });
 
 $('#load-example-button').addEventListener('click', loadExampleJson);
-$('#refresh-button').addEventListener('click', () => refreshAll());
-$('#runs-refresh').addEventListener('click', () => refreshAll());
+$('#refresh-button').addEventListener('click', () => refreshAll({ resetRuns: true }));
+$('#runs-refresh').addEventListener('click', () => refreshAll({ resetRuns: true }));
 $('#new-run-button').addEventListener('click', () => $('#create-run-panel').scrollIntoView({ behavior: 'smooth', block: 'start' }));
 $('#scroll-datasets').addEventListener('click', () => $('#datasets').scrollIntoView({ behavior: 'smooth', block: 'start' }));
 $('#close-detail-button').addEventListener('click', () => { $('#run-detail-panel').hidden = true; state.selectedRun = null; });

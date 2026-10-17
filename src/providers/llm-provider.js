@@ -338,10 +338,18 @@ function createGeminiProviderForModel(model) {
 }
 
 
-// Quota cooldowns are shared by provider instances inside this worker process.
-// A multi-worker deployment should move this registry into Redis for cross-process coordination.
+// Used by standalone consumers; the worker configures a Redis-backed store so
+// independent worker processes honor the same model cooldowns.
 const geminiModelCooldownUntil = new Map();
 const geminiModelCooldownReason = new Map();
+let sharedGeminiCooldownStore = null;
+
+export function configureGeminiCooldownStore(store) {
+  if (store !== null && (!store || typeof store.get !== 'function' || typeof store.set !== 'function')) {
+    throw new TypeError('Gemini cooldown store must provide get and set methods');
+  }
+  sharedGeminiCooldownStore = store;
+}
 
 export function buildGeminiModelChain(primaryModel, fallbackModelsText = '') {
   const models = [
@@ -383,7 +391,7 @@ export async function generateWithGeminiFallback({
   generateForModel,
   args,
   cooldowns = geminiModelCooldownUntil,
-  cooldownReasons = new Map(),
+  cooldownReasons = geminiModelCooldownReason,
   now = () => Date.now(),
   defaultCooldownMs = 60000,
   timeoutCooldownMs = 60000,
@@ -397,9 +405,10 @@ export async function generateWithGeminiFallback({
   const skipped = [];
 
   for (const candidate of candidates) {
-    const cooldownUntil = cooldowns.get(candidate) ?? 0;
+    const storedCooldown = await cooldowns.get(candidate);
+    const cooldownUntil = typeof storedCooldown === 'number' ? storedCooldown : Number(storedCooldown?.until ?? 0);
     if (cooldownUntil > now()) {
-      skipped.push({ model: candidate, cooldownUntil, reason: cooldownReasons.get(candidate) ?? 'quota/rate-limit' });
+      skipped.push({ model: candidate, cooldownUntil, reason: storedCooldown?.reason ?? cooldownReasons.get(candidate) ?? 'quota/rate-limit' });
       continue;
     }
 
@@ -450,14 +459,16 @@ export async function generateWithGeminiFallback({
           ? getGeminiCooldownMs(error, defaultCooldownMs)
           : getGeminiCooldownMs(error, unavailableCooldownMs);
       const until = now() + cooldownMs;
-      cooldowns.set(candidate, until);
+      await cooldowns.set(candidate, until, reason);
       cooldownReasons.set(candidate, reason);
       failures.push({ model: candidate, error, cooldownUntil: until, reason });
     }
   }
 
-  const cooldownTimes = candidates
-    .map((candidate) => cooldowns.get(candidate))
+  const cooldownTimes = (await Promise.all(candidates.map(async (candidate) => {
+    const stored = await cooldowns.get(candidate);
+    return typeof stored === 'number' ? stored : Number(stored?.until ?? 0);
+  })))
     .filter((until) => Number.isFinite(until) && until > now());
   const retryAfterMs = cooldownTimes.length ? Math.max(0, Math.min(...cooldownTimes) - now()) : defaultCooldownMs;
   const details = [
@@ -509,6 +520,7 @@ function createGeminiProvider(model) {
         defaultCooldownMs: env.GEMINI_DEFAULT_QUOTA_COOLDOWN_MS,
         timeoutCooldownMs: env.GEMINI_DEFAULT_TIMEOUT_COOLDOWN_MS,
         unavailableCooldownMs: env.GEMINI_DEFAULT_UNAVAILABLE_COOLDOWN_MS,
+        cooldowns: sharedGeminiCooldownStore ?? geminiModelCooldownUntil,
         cooldownReasons: geminiModelCooldownReason,
         generateForModel: async (candidate, requestArgs) => {
           if (candidate === primaryModel) return primaryProvider.generate(requestArgs);

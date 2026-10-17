@@ -73,7 +73,10 @@ describe('repository ownership predicates', () => {
   it('filters evaluation history by owner', async () => {
     pool.query.mockResolvedValue({ rows: [] });
     await listEvaluations(10, USER_A);
-    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('WHERE ($2::uuid IS NULL OR r.owner_id = $2)'), [10, USER_A]);
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringContaining('WHERE ($2::uuid IS NULL OR r.owner_id = $2)'),
+      [11, USER_A, null, null]
+    );
   });
 
   it('filters evaluation details by run ID and owner', async () => {
