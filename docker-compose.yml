@@ -3,12 +3,13 @@ services:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: evalforge
-      POSTGRES_PASSWORD: evalforge_dev_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-evalforge_dev_password}
       POSTGRES_DB: evalforge
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - evalforge_pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U evalforge -d evalforge"]
       interval: 5s
@@ -17,6 +18,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -26,15 +28,17 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
   api:
     build: .
+    init: true
     command: sh -c "npm run db:migrate && npm run db:seed && npm start"
     environment:
       NODE_ENV: production
       PORT: 3000
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
-      DATABASE_URL: postgres://evalforge:evalforge_dev_password@postgres:5432/evalforge
+      DATABASE_URL: postgres://evalforge:${POSTGRES_PASSWORD:-evalforge_dev_password}@postgres:5432/evalforge
       REDIS_URL: redis://redis:6379
       EVALFORGE_REGISTRATION_ENABLED: ${EVALFORGE_REGISTRATION_ENABLED:-false}
       EVALFORGE_BOOTSTRAP_SECRET: ${EVALFORGE_BOOTSTRAP_SECRET:-}
@@ -53,6 +57,8 @@ services:
       GEMINI_OUTPUT_COST_PER_1M_USD: ${GEMINI_OUTPUT_COST_PER_1M_USD:-}
       MODEL_COST_RATES_JSON: ${MODEL_COST_RATES_JSON:-}
       EVAL_CONCURRENCY: ${EVAL_CONCURRENCY:-3}
+      OPENAI_MAX_CONCURRENCY: ${OPENAI_MAX_CONCURRENCY:-2}
+      GEMINI_MAX_CONCURRENCY: ${GEMINI_MAX_CONCURRENCY:-2}
       EVAL_MAX_ATTEMPTS: ${EVAL_MAX_ATTEMPTS:-3}
       EVAL_LOCK_DURATION_MS: ${EVAL_LOCK_DURATION_MS:-120000}
     ports:
@@ -67,14 +73,19 @@ services:
       interval: 10s
       timeout: 3s
       retries: 12
+    restart: unless-stopped
+    stop_grace_period: 20s
+    security_opt:
+      - no-new-privileges:true
 
   worker:
     build: .
+    init: true
     command: npm run worker
     environment:
       NODE_ENV: production
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
-      DATABASE_URL: postgres://evalforge:evalforge_dev_password@postgres:5432/evalforge
+      DATABASE_URL: postgres://evalforge:${POSTGRES_PASSWORD:-evalforge_dev_password}@postgres:5432/evalforge
       REDIS_URL: redis://redis:6379
       EVALFORGE_REGISTRATION_ENABLED: ${EVALFORGE_REGISTRATION_ENABLED:-false}
       EVALFORGE_BOOTSTRAP_SECRET: ${EVALFORGE_BOOTSTRAP_SECRET:-}
@@ -93,12 +104,17 @@ services:
       GEMINI_OUTPUT_COST_PER_1M_USD: ${GEMINI_OUTPUT_COST_PER_1M_USD:-}
       MODEL_COST_RATES_JSON: ${MODEL_COST_RATES_JSON:-}
       EVAL_CONCURRENCY: ${EVAL_CONCURRENCY:-3}
+      OPENAI_MAX_CONCURRENCY: ${OPENAI_MAX_CONCURRENCY:-2}
+      GEMINI_MAX_CONCURRENCY: ${GEMINI_MAX_CONCURRENCY:-2}
       EVAL_MAX_ATTEMPTS: ${EVAL_MAX_ATTEMPTS:-3}
       EVAL_LOCK_DURATION_MS: ${EVAL_LOCK_DURATION_MS:-120000}
     depends_on:
       api:
         condition: service_healthy
     restart: unless-stopped
+    stop_grace_period: 2m
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   evalforge_pgdata:

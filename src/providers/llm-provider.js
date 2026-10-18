@@ -1,5 +1,22 @@
 import { env } from '../config/env.js';
 import { estimateCostDetails as calculateCostDetails } from '../services/cost-estimation.service.js';
+import { createConcurrencyLimit } from './concurrency-limit.js';
+
+const limitOpenAiCall = createConcurrencyLimit(env.OPENAI_MAX_CONCURRENCY);
+const limitGeminiCall = createConcurrencyLimit(env.GEMINI_MAX_CONCURRENCY);
+let sharedProviderConcurrencyLimit = null;
+
+export function configureProviderConcurrencyLimit(limit) {
+  if (limit !== null && typeof limit !== 'function') {
+    throw new TypeError('Provider concurrency limiter must be a function');
+  }
+  sharedProviderConcurrencyLimit = limit;
+}
+
+function withProviderLimit(provider, localLimit, operation) {
+  if (sharedProviderConcurrencyLimit) return sharedProviderConcurrencyLimit(provider, localLimit, operation);
+  return (provider === 'openai' ? limitOpenAiCall : limitGeminiCall)(operation);
+}
 
 function serializeInput(input) {
   return typeof input === 'string' ? input : JSON.stringify(input, null, 2);
@@ -300,14 +317,14 @@ function createGeminiProviderForModel(model) {
       }));
       if (tools.length) body.tools = [{ functionDeclarations: tools }];
 
-      const response = await fetchWithRetries(endpoint, {
+      const response = await withProviderLimit('gemini', env.GEMINI_MAX_CONCURRENCY, () => fetchWithRetries(endpoint, {
         method: 'POST',
         headers: {
           'x-goog-api-key': env.GEMINI_API_KEY,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(body)
-      }, { minIntervalMs: env.GEMINI_MIN_REQUEST_INTERVAL_MS, requestTimeoutMs: env.GEMINI_REQUEST_TIMEOUT_MS });
+      }, { minIntervalMs: env.GEMINI_MIN_REQUEST_INTERVAL_MS, requestTimeoutMs: env.GEMINI_REQUEST_TIMEOUT_MS }));
       const payload = await response.json();
       return mapGeminiResponse(payload);
     },
@@ -607,14 +624,14 @@ export function createLlmProvider({ provider, model }) {
         body.tools = openAiTools;
         body.tool_choice = 'auto';
       }
-      const response = await fetchWithRetries(`${baseUrl}/chat/completions`, {
+      const response = await withProviderLimit('openai', env.OPENAI_MAX_CONCURRENCY, () => fetchWithRetries(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${env.OPENAI_API_KEY}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(body)
-      });
+      }));
       const payload = await response.json();
       const message = payload.choices?.[0]?.message;
       const toolCalls = (message?.tool_calls ?? []).map((call) => {

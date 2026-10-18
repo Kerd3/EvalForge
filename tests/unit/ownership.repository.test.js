@@ -79,6 +79,27 @@ describe('repository ownership predicates', () => {
     );
   });
 
+  it('returns exactly one page and a stable cursor when the query yields an extra row', async () => {
+    const first = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', created_at: '2026-10-17T10:00:00.000Z' };
+    const second = { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', created_at: '2026-10-17T09:00:00.000Z' };
+    const lookahead = { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', created_at: '2026-10-17T08:00:00.000Z' };
+    pool.query.mockResolvedValue({ rows: [first, second, lookahead] });
+    const page = await listEvaluations(2, USER_A);
+    expect(page.items).toEqual([first, second]);
+    expect(page.hasMore).toBe(true);
+    expect(page.nextCursor).toEqual({ createdAt: '2026-10-17T09:00:00.000Z', id: second.id });
+    expect(pool.query.mock.calls[0][0]).toContain('ORDER BY r.created_at DESC, r.id DESC LIMIT $1');
+  });
+
+  it('returns no cursor when the final page has no lookahead row', async () => {
+    pool.query.mockResolvedValue({ rows: [{ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', created_at: '2026-10-17T10:00:00.000Z' }] });
+    const page = await listEvaluations(2, USER_A, { createdAt: '2026-10-18T00:00:00.000Z', id: USER_B });
+    expect(page.items).toHaveLength(1);
+    expect(page.hasMore).toBe(false);
+    expect(page.nextCursor).toBeNull();
+    expect(pool.query.mock.calls[0][1]).toEqual([3, USER_A, '2026-10-18T00:00:00.000Z', USER_B]);
+  });
+
   it('filters evaluation details by run ID and owner', async () => {
     pool.query.mockResolvedValue({ rows: [] });
     await getEvaluationById('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', USER_B);

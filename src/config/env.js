@@ -36,6 +36,8 @@ const schema = z.object({
   GEMINI_OUTPUT_COST_PER_1M_USD: optionalNumber,
   MODEL_COST_RATES_JSON: z.string().default(''),
   EVAL_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(3),
+  OPENAI_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(2),
+  GEMINI_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(2),
   EVAL_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
   EVAL_LOCK_DURATION_MS: z.coerce.number().int().min(30000).default(120000)
 });

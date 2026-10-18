@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import Redis from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { env } from '../../src/config/env.js';
@@ -11,6 +11,7 @@ describe('Redis-shared provider cooldowns', () => {
   let redisWorkerB;
   let workerAStore;
   let workerBStore;
+  let clockNow;
 
   const connectTestRedis = () => {
     const client = new Redis(env.REDIS_URL, {
@@ -26,11 +27,12 @@ describe('Redis-shared provider cooldowns', () => {
   };
 
   beforeAll(async () => {
+    clockNow = Date.now();
     redisWorkerA = connectTestRedis();
     redisWorkerB = connectTestRedis();
     await Promise.all([redisWorkerA.connect(), redisWorkerB.connect()]);
-    workerAStore = createRedisCooldownStore(redisWorkerA, { prefix });
-    workerBStore = createRedisCooldownStore(redisWorkerB, { prefix });
+    workerAStore = createRedisCooldownStore(redisWorkerA, { prefix, now: () => clockNow });
+    workerBStore = createRedisCooldownStore(redisWorkerB, { prefix, now: () => clockNow });
   });
 
   afterAll(async () => {
@@ -64,6 +66,8 @@ describe('Redis-shared provider cooldowns', () => {
     const sharedState = await workerBStore.get('primary-model');
     expect(sharedState).toMatchObject({ reason: 'quota/rate-limit' });
     expect(sharedState.until).toBeGreaterThan(Date.now());
+    const primaryKey = `${prefix}:${createHash('sha256').update('primary-model').digest('hex')}`;
+    expect(await redisWorkerA.pttl(primaryKey)).toBeGreaterThan(0);
 
     const shorterWrite = await workerBStore.set('primary-model', Date.now() + 100, 'timeout');
     expect(shorterWrite).toBe(0);
@@ -86,7 +90,7 @@ describe('Redis-shared provider cooldowns', () => {
       model: 'primary-model', outcome: 'skipped_cooldown', reason: 'quota/rate-limit'
     }));
 
-    await new Promise((resolve) => setTimeout(resolve, cooldownMs + 100));
+    clockNow = sharedState.until + 1;
     expect(await workerBStore.get('primary-model')).toBeNull();
     const afterExpiryCalls = [];
     const afterExpiryResponse = await generateWithGeminiFallback({

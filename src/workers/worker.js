@@ -1,7 +1,8 @@
 import { Worker } from 'bullmq';
 import { createRedisConnection } from '../db/redis.js';
 import { createRedisCooldownStore } from '../providers/redis-cooldown-store.js';
-import { configureGeminiCooldownStore } from '../providers/llm-provider.js';
+import { createRedisProviderConcurrencyLimit } from '../providers/redis-concurrency-limit.js';
+import { configureGeminiCooldownStore, configureProviderConcurrencyLimit } from '../providers/llm-provider.js';
 import { closePool } from '../db/pool.js';
 import { env } from '../config/env.js';
 import { EVALUATION_QUEUE_NAME } from '../queues/constants.js';
@@ -12,6 +13,11 @@ import { failEvaluationCampaign, updateRunStatus } from '../repositories/evaluat
 const connection = createRedisConnection();
 const cooldownConnection = createRedisConnection();
 configureGeminiCooldownStore(createRedisCooldownStore(cooldownConnection));
+configureProviderConcurrencyLimit(createRedisProviderConcurrencyLimit(cooldownConnection, {
+  // Lease exceeds the maximum configured Gemini request + retry wait; if a
+  // worker dies, abandoned slots eventually expire rather than blocking work.
+  leaseMs: (2 * env.GEMINI_REQUEST_TIMEOUT_MS) + (2 * env.GEMINI_MIN_REQUEST_INTERVAL_MS) + 150_000
+}));
 const worker = new Worker(
   EVALUATION_QUEUE_NAME,
   async (job) => {
@@ -50,6 +56,7 @@ async function shutdown(signal) {
   await worker.close();
   await connection.quit();
   await cooldownConnection.quit();
+  configureProviderConcurrencyLimit(null);
   await closePool();
   process.exit(0);
 }

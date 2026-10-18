@@ -10,13 +10,15 @@ import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
 import { createAuthenticationMiddleware, requireAuthentication, sameOriginMutationGuard } from './middleware/authentication.js';
 import { authService as defaultAuthService } from './services/auth.service.js';
 import { createAuthRouter } from './routes/auth.routes.js';
+import { getRequestMetrics, requestTelemetry } from './observability/request-telemetry.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-export function createApp({ datasetService, evaluationService, campaignService, authService = defaultAuthService, authMiddleware, healthCheck = async () => ({ status: 'ok' }), trustProxyHops = 0 }) {
+export function createApp({ datasetService, evaluationService, campaignService, authService = defaultAuthService, authMiddleware, healthCheck = async () => ({ status: 'ok' }), metricsProvider, metricsStore = null, trustProxyHops = 0 }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', trustProxyHops);
+  app.use((req, res, next) => requestTelemetry(req, res, next, metricsStore));
   app.use(helmet({
     contentSecurityPolicy: {
       directives: {
@@ -52,6 +54,10 @@ export function createApp({ datasetService, evaluationService, campaignService, 
     } catch (error) { next(error); }
   });
   app.use('/api/auth', createAuthRouter({ authService, authenticationMiddleware: authenticate }));
+  app.get('/api/ops/metrics', authenticate, requireAuthentication, async (req, res, next) => {
+    try { res.json({ data: await (metricsProvider ? metricsProvider() : metricsStore ? metricsStore.get() : getRequestMetrics()) }); }
+    catch (error) { next(error); }
+  });
   app.use('/api/datasets', authenticate, requireAuthentication, createDatasetsRouter({ datasetService }));
   app.use('/api/evaluations', authenticate, requireAuthentication, createEvaluationsRouter({ evaluationService }));
   if (campaignService) app.use('/api/evaluation-campaigns', authenticate, requireAuthentication, createEvaluationCampaignsRouter({ campaignService }));

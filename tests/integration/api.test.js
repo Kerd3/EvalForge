@@ -17,7 +17,7 @@ function makeApp() {
     calibrate: vi.fn().mockResolvedValue({ schema_version: 'evalforge.grader-calibration/v1', summary: { golden_examples: 1, evaluated_examples: 1, accuracy: 1 } })
   };
   const evaluationService = {
-    list: vi.fn().mockResolvedValue([]),
+    list: vi.fn().mockResolvedValue({ items: [], hasMore: false, nextCursor: null }),
     create: vi.fn().mockResolvedValue({ id: '11111111-1111-4111-8111-111111111111', status: 'queued' }),
     createRecorded: vi.fn().mockResolvedValue({ id: '11111111-1111-4111-8111-111111111111', status: 'completed', provider: 'recorded' }),
     getById: vi.fn().mockResolvedValue({ id: '11111111-1111-4111-8111-111111111111', status: 'completed', results: [] }),
@@ -44,6 +44,36 @@ describe('EvalForge API routes', () => {
     const response = await request(app).get('/api/health');
     expect(response.status).toBe(200);
     expect(response.body.data.status).toBe('ok');
+  });
+
+  it('validates run pagination and forwards an opaque cursor', async () => {
+    const { app, evaluationService } = makeApp();
+    const cursor = Buffer.from(JSON.stringify({ createdAt: '2026-10-17T00:00:00.000Z', id: '11111111-1111-4111-8111-111111111111' })).toString('base64url');
+    evaluationService.list.mockResolvedValueOnce({ items: [{ id: 'run-2' }], hasMore: true, nextCursor: { createdAt: '2026-10-16T00:00:00.000Z', id: '22222222-2222-4222-8222-222222222222' } });
+    const response = await request(app).get(`/api/evaluations?limit=1&cursor=${cursor}`);
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual([{ id: 'run-2' }]);
+    expect(response.body.pagination.has_more).toBe(true);
+    expect(evaluationService.list).toHaveBeenCalledWith(1, '11111111-1111-4111-8111-111111111111', {
+      createdAt: '2026-10-17T00:00:00.000Z', id: '11111111-1111-4111-8111-111111111111'
+    });
+    const nextCursor = JSON.parse(Buffer.from(response.body.pagination.next_cursor, 'base64url').toString('utf8'));
+    expect(nextCursor).toEqual({ createdAt: '2026-10-16T00:00:00.000Z', id: '22222222-2222-4222-8222-222222222222' });
+  });
+
+  it('rejects malformed run cursors and limits outside the supported range', async () => {
+    const { app, evaluationService } = makeApp();
+    expect((await request(app).get('/api/evaluations?cursor=%%%')).status).toBe(400);
+    expect((await request(app).get('/api/evaluations?limit=101')).status).toBe(400);
+    expect(evaluationService.list).not.toHaveBeenCalled();
+  });
+
+  it('exposes operational metrics only to authenticated users', async () => {
+    const { app } = makeApp();
+    const response = await request(app).get('/api/ops/metrics');
+    expect(response.status).toBe(200);
+    expect(response.body.data.processUptimeSeconds).toEqual(expect.any(Number));
+    expect(response.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
   it('lists datasets', async () => {
@@ -159,6 +189,15 @@ describe('EvalForge API routes', () => {
     expect(response.status).toBe(202);
     expect(response.body.data.status).toBe('queued');
     expect(evaluationService.create).toHaveBeenCalledOnce();
+  });
+
+  it('cancels a run through the owner-scoped service', async () => {
+    const { app, evaluationService } = makeApp();
+    const runId = '11111111-1111-4111-8111-111111111111';
+    const response = await request(app).post(`/api/evaluations/${runId}/cancel`).send({});
+    expect(response.status).toBe(200);
+    expect(response.body.data.status).toBe('cancelled');
+    expect(evaluationService.cancel).toHaveBeenCalledWith(runId, '11111111-1111-4111-8111-111111111111');
   });
 
   it('accepts recorded evaluations and forwards the authenticated owner without queueing generation', async () => {

@@ -1,0 +1,30 @@
+services:
+  api:
+    environment:
+      AUTH_COOKIE_SECURE: "true"
+      TRUST_PROXY_HOPS: "1"
+    ports: !reset []
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    environment:
+      EVALFORGE_DOMAIN: ${EVALFORGE_DOMAIN:?Set EVALFORGE_DOMAIN to the public DNS name}
+    ports:
+      - "127.0.0.1:80:80"
+      - "127.0.0.1:443:443"
+      - "127.0.0.1:443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - evalforge_caddy_data:/data
+      - evalforge_caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  evalforge_caddy_data:
+  evalforge_caddy_config:

@@ -37,7 +37,10 @@ function makeApp() {
   return { app, datasetService, evaluationService, campaignService, authService };
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe('account authentication and resource route guards', () => {
   it('ignores forwarded IP headers unless a trusted proxy hop count is configured', () => {
@@ -118,11 +121,13 @@ describe('account authentication and resource route guards', () => {
     expect(authService.register).not.toHaveBeenCalled();
   });
 
-  it('sets an HttpOnly, SameSite=Lax cookie when registration succeeds', async () => {
+  it('sets a Secure, HttpOnly, SameSite=Lax cookie when secure cookies are enabled', async () => {
+    vi.stubEnv('AUTH_COOKIE_SECURE', 'true');
     const { app, authService } = makeApp();
     const response = await request(app).post('/api/auth/register').send({ email: 'a@example.com', password: 'a-long-test-password', bootstrap_secret: 'test-bootstrap-secret' });
     expect(response.status).toBe(201);
     expect(response.body.data.user.email).toBe('a@example.com');
+    expect(response.headers['set-cookie'][0]).toContain('Secure');
     expect(response.headers['set-cookie'][0]).toContain('HttpOnly');
     expect(response.headers['set-cookie'][0]).toContain('SameSite=Lax');
     expect(response.headers['set-cookie'][0]).toContain('evalforge_session=opaque-test-token');
@@ -131,10 +136,12 @@ describe('account authentication and resource route guards', () => {
   });
 
   it('destroys the server-side session and expires the cookie on logout', async () => {
+    vi.stubEnv('AUTH_COOKIE_SECURE', 'true');
     const { app, authService } = makeApp();
     const response = await request(app).post('/api/auth/logout').set('x-test-session', 'opaque-test-token');
     expect(response.status).toBe(200);
     expect(authService.logout).toHaveBeenCalledWith('opaque-test-token');
     expect(response.headers['set-cookie'][0]).toContain('Max-Age=0');
+    expect(response.headers['set-cookie'][0]).toContain('Secure');
   });
 });

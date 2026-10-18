@@ -1,0 +1,5 @@
+
+{$EVALFORGE_DOMAIN} {
+    tls internal
+    reverse_proxy api:3000
+}
