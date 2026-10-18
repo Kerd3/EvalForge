@@ -279,14 +279,22 @@ export function mapGeminiResponse(payload = {}) {
         // usage because they are part of output-token consumption on thinking models.
         // Gemini omits zero-valued fields, so an absent count here means zero.
         outputTokens: Number(payload.usageMetadata.candidatesTokenCount ?? 0)
-          + Number(payload.usageMetadata.thoughtsTokenCount ?? 0)
+          + Number(payload.usageMetadata.thoughtsTokenCount ?? 0),
+        cachedInputTokens: Number(payload.usageMetadata.cachedContentTokenCount ?? 0),
+        toolUsePromptTokens: Number(payload.usageMetadata.toolUsePromptTokenCount ?? 0),
+        reasoningTokens: Number(payload.usageMetadata.thoughtsTokenCount ?? 0),
+        totalTokens: Number(payload.usageMetadata.totalTokenCount ?? 0),
+        promptTokenDetails: payload.usageMetadata.promptTokensDetails ?? [],
+        cachedContentTokenDetails: payload.usageMetadata.cacheTokensDetails ?? [],
+        outputTokenDetails: payload.usageMetadata.candidatesTokensDetails ?? []
       }
       : null,
     providerMetadata: {
       responseId: payload.responseId,
       finishReason: candidate?.finishReason,
       modelVersion: payload.modelVersion,
-      thoughtsTokens: Number(payload.usageMetadata?.thoughtsTokenCount ?? 0)
+      thoughtsTokens: Number(payload.usageMetadata?.thoughtsTokenCount ?? 0),
+      serviceTier: payload.usageMetadata?.serviceTier ?? null
     }
   };
 }
@@ -645,7 +653,10 @@ export function createLlmProvider({ provider, model }) {
         usage: Number.isFinite(Number(payload.usage?.prompt_tokens)) && payload.usage?.prompt_tokens !== null
           ? {
             inputTokens: Number(payload.usage.prompt_tokens),
-            outputTokens: Number(payload.usage.completion_tokens ?? 0)
+            outputTokens: Number(payload.usage.completion_tokens ?? 0),
+            cachedInputTokens: Number(payload.usage.prompt_tokens_details?.cached_tokens ?? 0),
+            reasoningTokens: Number(payload.usage.completion_tokens_details?.reasoning_tokens ?? 0),
+            totalTokens: Number(payload.usage.total_tokens ?? 0)
           }
           : null,
         providerMetadata: {
@@ -653,6 +664,7 @@ export function createLlmProvider({ provider, model }) {
           finishReason: payload.choices?.[0]?.finish_reason,
           requestedModel: resolvedModel,
           actualModel: payload.model || resolvedModel,
+          serviceTier: payload.service_tier ?? null,
           fallbackUsed: false
         }
       };
@@ -684,18 +696,20 @@ function providerCostRatesFromEnv() {
   return {
     openai: {
       inputPer1MUsd: env.OPENAI_INPUT_COST_PER_1M_USD,
-      outputPer1MUsd: env.OPENAI_OUTPUT_COST_PER_1M_USD
+      outputPer1MUsd: env.OPENAI_OUTPUT_COST_PER_1M_USD,
+      cachedInputPer1MUsd: env.OPENAI_CACHED_INPUT_COST_PER_1M_USD
     },
     gemini: {
       inputPer1MUsd: env.GEMINI_INPUT_COST_PER_1M_USD,
-      outputPer1MUsd: env.GEMINI_OUTPUT_COST_PER_1M_USD
+      outputPer1MUsd: env.GEMINI_OUTPUT_COST_PER_1M_USD,
+      cachedInputPer1MUsd: env.GEMINI_CACHED_INPUT_COST_PER_1M_USD
     }
   };
 }
 
-export function estimateCostDetails({ provider, model, inputTokens = 0, outputTokens = 0 }) {
+export function estimateCostDetails({ provider, model, inputTokens = 0, outputTokens = 0, cachedInputTokens = 0, unsupportedCategories = [] }) {
   return calculateCostDetails({
-    provider, model, inputTokens, outputTokens,
+    provider, model, inputTokens, outputTokens, cachedInputTokens, unsupportedCategories,
     modelCostRates: env.MODEL_COST_RATES,
     providerCostRates: providerCostRatesFromEnv()
   });

@@ -22,7 +22,13 @@ vi.mock('../../src/providers/llm-provider.js', () => ({
   createLlmProvider: () => ({ name: 'gemini', model: 'req-model', generate: provider.generate }),
   estimateCostDetails: (args) => {
     cost.calls.push(args);
-    return { pricingStatus: 'estimated', estimatedCostUsd: (args.inputTokens + args.outputTokens) / 1e6, rateSource: 'model-specific', model: args.model, explanation: 'ok' };
+    return {
+      pricingStatus: 'estimated', estimatedCostUsd: (args.inputTokens + args.outputTokens) / 1e6,
+      knownEstimatedCostUsd: (args.inputTokens + args.outputTokens) / 1e6,
+      rateSource: 'model-specific', pricingSource: 'test source', pricingEffectiveDate: '2026-10-01',
+      pricingTier: 'standard', pricingAssumptions: ['fixture'], pricingCapturedAt: '2026-10-18T00:00:00.000Z',
+      model: args.model, explanation: 'ok'
+    };
   }
 }));
 
@@ -79,6 +85,26 @@ describe('fallback attribution and cost accounting', () => {
     expect(cost.calls.at(-1)).toMatchObject({ model: 'fallback-model', inputTokens: 100, outputTokens: 50 });
     expect(last()).toMatchObject({ status: 'passed', inputTokens: 100, outputTokens: 50 });
     expect(last().actualOutput.providerMetadata.costEstimate.calls[0].model).toBe('fallback-model');
+  });
+
+  it('persists detailed usage and the per-call historical pricing snapshot', async () => {
+    provider.generate.mockResolvedValue({
+      content: 'hello', toolCalls: [],
+      usage: { inputTokens: 100, outputTokens: 50, cachedInputTokens: 20, reasoningTokens: 10, toolUsePromptTokens: 3, totalTokens: 150 },
+      providerMetadata: { requestedModel: 'req-model', actualModel: 'fallback-model', fallbackUsed: true, serviceTier: 'priority' }
+    });
+    await processEvaluationRun('r1');
+    expect(cost.calls.at(-1)).toMatchObject({
+      model: 'fallback-model', cachedInputTokens: 20, unsupportedCategories: ['tool-use prompt tokens']
+    });
+    expect(last().actualOutput.providerMetadata.costEstimate.calls[0]).toMatchObject({
+      cachedInputTokens: 20, reasoningTokens: 10, toolUsePromptTokens: 3, totalTokens: 150,
+      providerServiceTier: 'priority', pricingSource: 'test source', pricingEffectiveDate: '2026-10-01'
+    });
+    expect(last().actualOutput.providerMetadata.costEstimate.pricingSnapshots[0]).toMatchObject({
+      model: 'fallback-model', pricingTier: 'standard', pricingAssumptions: ['fixture'],
+      pricingCapturedAt: '2026-10-18T00:00:00.000Z', providerServiceTier: 'priority'
+    });
   });
 
   it('records unavailable cost, never an actual $0, when the provider reports no usage', async () => {

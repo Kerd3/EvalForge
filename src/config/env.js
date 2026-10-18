@@ -18,6 +18,7 @@ const schema = z.object({
   DEFAULT_OPENAI_MODEL: z.string().min(1).default('gpt-4o-mini'),
   OPENAI_INPUT_COST_PER_1M_USD: optionalNumber,
   OPENAI_OUTPUT_COST_PER_1M_USD: optionalNumber,
+  OPENAI_CACHED_INPUT_COST_PER_1M_USD: optionalNumber,
   GEMINI_API_KEY: z.string().optional().default(''),
   DEFAULT_GEMINI_MODEL: z.string().min(1).default('gemini-3.8-flash'),
   // Ordered fallback chain used after Gemini quota/rate-limit errors or request timeouts.
@@ -34,6 +35,7 @@ const schema = z.object({
   GEMINI_DEFAULT_QUOTA_COOLDOWN_MS: z.coerce.number().int().min(1000).max(86400000).default(60000),
   GEMINI_INPUT_COST_PER_1M_USD: optionalNumber,
   GEMINI_OUTPUT_COST_PER_1M_USD: optionalNumber,
+  GEMINI_CACHED_INPUT_COST_PER_1M_USD: optionalNumber,
   MODEL_COST_RATES_JSON: z.string().default(''),
   EVAL_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(3),
   OPENAI_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(2),
@@ -50,7 +52,12 @@ if (!parsed.success) {
 
 const rateEntrySchema = z.object({
   inputPer1MUsd: z.number().finite().nonnegative().optional(),
-  outputPer1MUsd: z.number().finite().nonnegative().optional()
+  outputPer1MUsd: z.number().finite().nonnegative().optional(),
+  cachedInputPer1MUsd: z.number().finite().nonnegative().optional(),
+  pricingSource: z.string().trim().min(1).optional(),
+  effectiveDate: z.string().trim().min(1).optional(),
+  tier: z.string().trim().min(1).optional(),
+  assumptions: z.array(z.string().trim().min(1)).optional()
 }).strict().refine((entry) => entry.inputPer1MUsd !== undefined || entry.outputPer1MUsd !== undefined, {
   message: 'A model rate entry must include inputPer1MUsd, outputPer1MUsd, or both.'
 });
@@ -67,7 +74,7 @@ if (parsed.data.MODEL_COST_RATES_JSON.trim()) {
   const ratesParsed = modelCostRatesSchema.safeParse(json);
   if (!ratesParsed.success) {
     console.error('Invalid MODEL_COST_RATES_JSON:', ratesParsed.error.flatten());
-    throw new Error('Invalid model cost rate configuration. Each entry may contain non-negative inputPer1MUsd and/or outputPer1MUsd values.');
+    throw new Error('Invalid model cost rate configuration. Entries support non-negative input, output, and cached-input rates plus pricing metadata.');
   }
   modelCostRates = ratesParsed.data;
 }

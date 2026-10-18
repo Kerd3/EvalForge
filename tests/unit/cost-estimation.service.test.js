@@ -49,4 +49,43 @@ describe('model-specific cost estimation', () => {
     expect(mock.estimatedCostUsd).toBe(0);
     expect(mock.explanation).toContain('no API usage charge');
   });
+
+  it('prices cached input separately and preserves pricing provenance in the snapshot', () => {
+    const result = estimateCostDetails({
+      provider: 'openai', model: 'gpt-test', inputTokens: 1000, cachedInputTokens: 400, outputTokens: 100,
+      modelCostRates: { openai: { 'gpt-test': {
+        inputPer1MUsd: 2, cachedInputPer1MUsd: 0.5, outputPer1MUsd: 8,
+        pricingSource: 'provider pricing page', effectiveDate: '2026-10-01', tier: 'standard',
+        assumptions: ['USD list pricing']
+      } } }
+    });
+    expect(result.pricingStatus).toBe('estimated');
+    expect(result.estimatedCostUsd).toBe(0.0022);
+    expect(result).toMatchObject({
+      rateSource: 'model-specific', pricingSource: 'provider pricing page',
+      pricingEffectiveDate: '2026-10-01', pricingTier: 'standard',
+      pricingAssumptions: ['USD list pricing'], cachedInputRatePer1MUsd: 0.5
+    });
+    expect(Number.isNaN(Date.parse(result.pricingCapturedAt))).toBe(false);
+  });
+
+  it('keeps a known subtotal when cached or extra billable usage lacks rates', () => {
+    const cached = estimateCostDetails({
+      provider: 'gemini', model: 'gemini-test', inputTokens: 1000, cachedInputTokens: 400, outputTokens: 100,
+      modelCostRates: { gemini: { 'gemini-test': { inputPer1MUsd: 2, outputPer1MUsd: 8 } } }
+    });
+    expect(cached.pricingStatus).toBe('partial');
+    expect(cached.estimatedCostUsd).toBeNull();
+    expect(cached.knownEstimatedCostUsd).toBe(0.002);
+    expect(cached.explanation).toContain('no cachedInputPer1MUsd rate');
+
+    const extra = estimateCostDetails({
+      provider: 'gemini', model: 'gemini-test', inputTokens: 1000, outputTokens: 100,
+      modelCostRates: { gemini: { 'gemini-test': { inputPer1MUsd: 2, outputPer1MUsd: 8 } } },
+      unsupportedCategories: ['tool-use prompt tokens']
+    });
+    expect(extra.pricingStatus).toBe('partial');
+    expect(extra.estimatedCostUsd).toBeNull();
+    expect(extra.explanation).toContain('tool-use prompt tokens usage was reported');
+  });
 });

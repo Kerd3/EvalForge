@@ -165,15 +165,15 @@ Use synthetic or non-sensitive content when testing with API tiers whose terms a
 
 ## Cost configuration
 
-Set exact per-model input and output rates in `.env` using `MODEL_COST_RATES_JSON`. Values are USD per **1,000,000 tokens**. Configure both rates for each model you expect to use, including fallback models.
+Set exact per-model input and output rates in `.env` using `MODEL_COST_RATES_JSON`. Values are USD per **1,000,000 tokens**. Configure both rates for each model you expect to use, including fallback models. Cached input can have its own rate.
 
 ```dotenv
-MODEL_COST_RATES_JSON='{"gemini":{"your-primary-model-id":{"inputPer1MUsd":1.0,"outputPer1MUsd":2.0},"your-fallback-model-id":{"inputPer1MUsd":0.5,"outputPer1MUsd":1.5}}}'
+MODEL_COST_RATES_JSON='{"gemini":{"your-primary-model-id":{"inputPer1MUsd":1.0,"cachedInputPer1MUsd":0.25,"outputPer1MUsd":2.0,"pricingSource":"provider pricing page","effectiveDate":"YYYY-MM-DD","tier":"standard","assumptions":["USD list price"]},"your-fallback-model-id":{"inputPer1MUsd":0.5,"outputPer1MUsd":1.5}}}'
 ```
 
 The rates above are illustrative placeholders, **not provider pricing**. Replace them with rates verified for your account, model, and pricing tier. Explicitly configuring both rates as `0` produces a zero estimate; only do this if zero is the assumption you intend to model. EvalForge cannot infer your billing tier from token counts.
 
-Model-specific rates take priority. If no complete model-specific rate exists, complete provider-wide rates can be configured using `GEMINI_INPUT_COST_PER_1M_USD` and `GEMINI_OUTPUT_COST_PER_1M_USD` or the corresponding `OPENAI_...` variables. Missing rates are reported as unavailable rather than guessed. The cost is an estimate from recorded token usage and configured rates, not an invoice. Cached-token discounts and other provider-specific billing adjustments may not be represented. Rates are stored with the run result; historical estimates are not automatically recalculated after `.env` changes.
+Model-specific rates take priority. If no complete model-specific rate exists, complete provider-wide rates can be configured using `GEMINI_INPUT_COST_PER_1M_USD` and `GEMINI_OUTPUT_COST_PER_1M_USD` or the corresponding `OPENAI_...` variables. Add `*_CACHED_INPUT_COST_PER_1M_USD` only when a matching cached-input price is known. When a provider reports cached input but no cached rate is configured, EvalForge records a known subtotal and marks the full cost partial. Gemini tool-use prompt tokens are captured; because they may have distinct billing and this version has no separate tool-use rate, affected costs are partial. OpenAI reasoning-token counts are recorded as details of output tokens and are not added a second time. Pricing source, effective date, tier, assumptions, provider service tier, and capture time are saved with each call when available. Missing rates or unsupported billable categories remain unavailable/partial rather than being guessed. Historical snapshots are not recalculated after `.env` changes.
 
 ## Development and tests
 

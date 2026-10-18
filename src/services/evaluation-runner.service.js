@@ -101,6 +101,11 @@ export async function processEvaluationRun(runId) {
         model: generationModel,
         inputTokens: Number(response.usage?.inputTokens ?? 0),
         outputTokens: Number(response.usage?.outputTokens ?? 0),
+        cachedInputTokens: Number(response.usage?.cachedInputTokens ?? 0),
+        reasoningTokens: Number(response.usage?.reasoningTokens ?? 0),
+        toolUsePromptTokens: Number(response.usage?.toolUsePromptTokens ?? 0),
+        totalTokens: Number(response.usage?.totalTokens ?? 0),
+        providerServiceTier: response.providerMetadata?.serviceTier ?? null,
         usageReported: usageWasReported(response.usage)
       }];
       const judgeConfig = testCase.grading_rules ?? {};
@@ -125,6 +130,11 @@ export async function processEvaluationRun(runId) {
             model: judgeModel,
             inputTokens: Number(judgeResult.usage?.inputTokens ?? 0),
             outputTokens: Number(judgeResult.usage?.outputTokens ?? 0),
+            cachedInputTokens: Number(judgeResult.usage?.cachedInputTokens ?? 0),
+            reasoningTokens: Number(judgeResult.usage?.reasoningTokens ?? 0),
+            toolUsePromptTokens: Number(judgeResult.usage?.toolUsePromptTokens ?? 0),
+            totalTokens: Number(judgeResult.usage?.totalTokens ?? 0),
+            providerServiceTier: judgeResult.providerMetadata?.serviceTier ?? null,
             usageReported: usageWasReported(judgeResult.usage)
           });
         }
@@ -152,22 +162,33 @@ export async function processEvaluationRun(runId) {
             ...call,
             pricingStatus: 'unavailable',
             estimatedCostUsd: null,
+            knownEstimatedCostUsd: null,
             rateSource: null,
+            pricingSource: null,
+            pricingEffectiveDate: null,
+            pricingTier: null,
+            pricingAssumptions: [],
+            pricingCapturedAt: new Date().toISOString(),
             explanation: `Estimated cost unavailable: the provider did not report token usage for this ${call.operation} call, so cost was not recorded as zero.`
           };
         }
         return {
           ...call,
-          ...estimateCostDetails({ provider: call.provider, model: call.model, inputTokens: call.inputTokens, outputTokens: call.outputTokens })
+          ...estimateCostDetails({
+            provider: call.provider, model: call.model,
+            inputTokens: call.inputTokens, outputTokens: call.outputTokens,
+            cachedInputTokens: call.cachedInputTokens,
+            unpricedInputTokens: call.toolUsePromptTokens,
+            unsupportedCategories: call.toolUsePromptTokens > 0 ? ['tool-use prompt tokens'] : []
+          })
         };
       });
-      const unavailableCostCalls = costCalls.filter((call) => call.pricingStatus === 'unavailable');
+      const unavailableCostCalls = costCalls.filter((call) => ['unavailable', 'partial'].includes(call.pricingStatus));
       const pricedCostCalls = costCalls.filter((call) =>
-        ['estimated', 'not_applicable'].includes(call.pricingStatus)
-        && call.estimatedCostUsd !== null && call.estimatedCostUsd !== undefined
+        call.knownEstimatedCostUsd !== null && call.knownEstimatedCostUsd !== undefined
       );
       const knownEstimatedCostUsd = pricedCostCalls.length
-        ? Number(pricedCostCalls.reduce((sum, call) => sum + Number(call.estimatedCostUsd), 0).toFixed(10))
+        ? Number(pricedCostCalls.reduce((sum, call) => sum + Number(call.knownEstimatedCostUsd), 0).toFixed(10))
         : null;
       const estimatedCostUsd = unavailableCostCalls.length ? null : knownEstimatedCostUsd;
       const costSources = [...new Set(costCalls.map((call) => call.rateSource).filter(Boolean))];
@@ -181,6 +202,10 @@ export async function processEvaluationRun(runId) {
         knownEstimatedCostUsd,
         currency: 'USD',
         rateSources: costSources,
+        pricingSnapshots: costCalls.map(({ operation, provider, model, rateSource, pricingSource, pricingEffectiveDate, pricingTier, pricingAssumptions, pricingCapturedAt, providerServiceTier }) => ({
+          operation, provider, model, rateSource, pricingSource, pricingEffectiveDate,
+          pricingTier, providerServiceTier, pricingAssumptions, pricingCapturedAt
+        })),
         calls: costCalls,
         explanation: unavailableCostCalls.length
           ? `${pricedCostCalls.length ? `Known subtotal: $${knownEstimatedCostUsd.toFixed(8)}; full cost is unavailable. ` : ''}${[...new Set(unavailableCostCalls.map((call) => call.explanation))].join(' ')}`

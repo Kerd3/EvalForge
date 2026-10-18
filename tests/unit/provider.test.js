@@ -71,15 +71,24 @@ describe('Gemini response mapping', () => {
           { functionCall: { name: 'lookup_order', args: { orderId: 'ORD-1002' } } }
         ] }
       }],
-      usageMetadata: { promptTokenCount: 21, candidatesTokenCount: 8, thoughtsTokenCount: 3, totalTokenCount: 32 }
+      usageMetadata: {
+        promptTokenCount: 21, candidatesTokenCount: 8, thoughtsTokenCount: 3,
+        totalTokenCount: 32, cachedContentTokenCount: 5, toolUsePromptTokenCount: 2,
+        serviceTier: 'priority', promptTokensDetails: [{ modality: 'TEXT', tokenCount: 21 }]
+      }
     });
 
     expect(mapped.content).toBe('Looking up the order now.');
     expect(mapped.toolCalls).toEqual([{ name: 'lookup_order', arguments: { orderId: 'ORD-1002' } }]);
-    expect(mapped.usage).toEqual({ inputTokens: 21, outputTokens: 11 });
+    expect(mapped.usage).toMatchObject({
+      inputTokens: 21, outputTokens: 11, cachedInputTokens: 5,
+      toolUsePromptTokens: 2, reasoningTokens: 3, totalTokens: 32
+    });
+    expect(mapped.usage.promptTokenDetails).toEqual([{ modality: 'TEXT', tokenCount: 21 }]);
     expect(mapped.providerMetadata.thoughtsTokens).toBe(3);
     expect(mapped.providerMetadata.finishReason).toBe('STOP');
     expect(mapped.providerMetadata.modelVersion).toBe('gemini-3.8-flash');
+    expect(mapped.providerMetadata.serviceTier).toBe('priority');
   });
 
   it('handles an empty or blocked Gemini response without crashing', () => {
