@@ -3,76 +3,130 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b1020">
+  <meta name="theme-color" content="#101714">
+  <meta name="description" content="Evaluate AI model behavior, inspect failures, and track reliability across datasets and runs.">
   <title>EvalForge — AI Evaluation Workspace</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/redesign.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
+  <a class="skip-link" href="#overview">Skip to workspace</a>
   <section class="account-gate" id="account-gate" hidden aria-labelledby="account-title">
-    <form class="account-card" id="account-form">
-      <div class="brand-mark"><span></span><span></span><span></span></div>
-      <p class="eyebrow">EVALFORGE ACCOUNT</p>
-      <h1 id="account-title">Sign in to your workspace</h1>
-      <p class="account-description" id="account-description">Your datasets and evaluation history are private to your account.</p>
-      <label for="account-email">Email</label><input id="account-email" type="email" autocomplete="email" maxlength="254" required>
-      <label for="account-password">Password</label><input id="account-password" type="password" autocomplete="current-password" minlength="1" maxlength="128" required>
-      <div id="account-bootstrap-wrap" hidden><label for="account-bootstrap">Bootstrap secret</label><input id="account-bootstrap" type="password" autocomplete="off" maxlength="256"><small>Required once to claim existing unowned datasets and runs.</small></div>
-      <button class="button button-primary" id="account-submit" type="submit">Sign in</button>
-      <p class="account-error" id="account-error" role="alert"></p>
-      <button class="account-mode" type="button" id="account-mode" hidden>Create an account</button>
-    </form>
+    <div class="account-layout">
+      <aside class="account-story" aria-label="EvalForge evaluation workflow">
+        <a class="account-brand" href="/" aria-label="EvalForge home">
+          <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+          <span>EvalForge</span>
+        </a>
+        <div class="account-story-copy">
+          <h1>Test models.<br>See why.</h1>
+          <p>Bring a dataset, run your model, and inspect every result in one private workspace.</p>
+        </div>
+        <div class="account-trace" aria-hidden="true">
+          <div class="trace-heading"><span>Evaluation path</span><span class="trace-live"><i></i> Private workspace</span></div>
+          <div class="trace-flow">
+            <div class="trace-step"><span class="trace-glyph trace-input"><i></i><i></i><i></i></span><span>Test case</span></div>
+            <span class="trace-connector"></span>
+            <div class="trace-step"><span class="trace-glyph trace-model"><i></i><i></i><i></i><i></i></span><span>Model output</span></div>
+            <span class="trace-connector"></span>
+            <div class="trace-step"><span class="trace-glyph trace-grade"><i></i><i></i><i></i></span><span>Grader verdict</span></div>
+          </div>
+          <div class="trace-caption"><span>Inspect each response</span><span>Repeat with confidence</span></div>
+        </div>
+        <p class="account-privacy"><span class="privacy-mark" aria-hidden="true"></span>Private by design. Your evaluation data belongs to your account.</p>
+      </aside>
+      <form class="account-card" id="account-form" novalidate>
+        <div class="account-form-heading">
+          <h2 id="account-title">Welcome back.</h2>
+          <p class="account-description" id="account-description">Sign in to continue to your evaluations and datasets.</p>
+        </div>
+        <div class="account-mode-switch" role="group" aria-label="Choose sign-in or sign-up">
+          <button class="account-mode-tab is-active" type="button" id="account-signin-tab" aria-pressed="true">Sign in</button>
+          <button class="account-mode-tab" type="button" id="account-signup-tab" aria-pressed="false" hidden>Sign up</button>
+        </div>
+        <div class="account-field">
+          <label for="account-email">Email / username</label>
+          <input id="account-email" type="email" autocomplete="email" maxlength="254" placeholder="you@company.com" required>
+          <small class="account-help">Use your email address as your username.</small>
+        </div>
+        <div class="account-field">
+          <label for="account-password">Password</label>
+          <div class="password-control">
+            <input id="account-password" type="password" autocomplete="current-password" minlength="1" maxlength="128" required aria-describedby="account-password-help">
+            <button class="password-toggle" type="button" data-password-toggle aria-label="Show password" aria-pressed="false">Show</button>
+          </div>
+          <small id="account-password-help" class="account-help" hidden>Use at least 12 characters.</small>
+        </div>
+        <div class="account-field" id="account-confirm-wrap" hidden>
+          <label for="account-password-confirm">Confirm password</label>
+          <div class="password-control">
+            <input id="account-password-confirm" type="password" autocomplete="new-password" maxlength="128" aria-describedby="account-password-help">
+            <button class="password-toggle" type="button" data-password-toggle aria-label="Show confirmation password" aria-pressed="false">Show</button>
+          </div>
+        </div>
+        <div class="account-field bootstrap-field" id="account-bootstrap-wrap" hidden>
+          <label for="account-bootstrap">Bootstrap secret</label>
+          <input id="account-bootstrap" type="password" autocomplete="off" maxlength="256">
+          <small class="account-help">Your administrator must provide this one-time secret to claim existing workspace data.</small>
+        </div>
+        <p class="account-error" id="account-error" role="alert" aria-live="assertive" hidden></p>
+        <button class="button button-primary account-submit" id="account-submit" type="submit">Sign in</button>
+        <p class="account-switch-copy" id="account-switch-copy">Secure access to your evaluation workspace.</p>
+        <div class="account-form-footnote"><span>EvalForge</span><span>Built for repeatable evaluation</span></div>
+      </form>
+    </div>
   </section>
   <div class="app-shell" hidden>
     <aside class="sidebar">
       <a class="brand" href="/" aria-label="EvalForge home">
         <span class="brand-mark"><span></span><span></span><span></span></span>
-        <span>eval<span class="brand-accent">forge</span><small>AI RELIABILITY WORKSPACE</small></span>
+        <span>eval<span class="brand-accent">forge</span><small>AI reliability workspace</small></span>
       </a>
-      <div class="workspace-label">WORKSPACE</div>
+      <div class="workspace-label">Workspace</div>
       <nav class="main-nav" aria-label="Main navigation">
-        <a class="nav-item active" href="#overview"><span class="nav-icon">◫</span> Overview</a>
-        <a class="nav-item" href="#runs"><span class="nav-icon">◷</span> Evaluation runs</a>
-        <a class="nav-item" href="#datasets"><span class="nav-icon">▤</span> Datasets</a>
-        <a class="nav-item" href="#import-dataset"><span class="nav-icon">＋</span> Import dataset</a>
+        <a class="nav-item active" href="#overview" aria-current="page"><span class="nav-icon" aria-hidden="true">◫</span><span>Overview</span></a>
+        <a class="nav-item" href="#runs"><span class="nav-icon" aria-hidden="true">◷</span><span>Evaluation runs</span></a>
+        <a class="nav-item" href="#datasets"><span class="nav-icon" aria-hidden="true">▤</span><span>Datasets</span></a>
+        <a class="nav-item" href="#import-dataset"><span class="nav-icon" aria-hidden="true">＋</span><span>Import dataset</span></a>
       </nav>
       <div class="sidebar-bottom">
         <div class="system-card"><span class="pulse-dot"></span><div><strong>Evaluation engine</strong><small id="engine-status">Checking services…</small></div></div>
-        <div class="side-version"><span>LOCAL WORKSPACE</span><span>v1.0.0</span></div>
+        <div class="side-version"><span>Local workspace</span><span>v1.0.0</span></div>
       </div>
     </aside>
 
     <main class="main-content">
       <header class="topbar">
         <div class="breadcrumbs"><span>Workspace</span><span class="crumb-slash">/</span><strong>Overview</strong></div>
-        <div class="topbar-actions"><span class="mode-tag"><span class="tiny-dot"></span> PRIVATE WORKSPACE</span><button class="icon-button" id="refresh-button" title="Refresh data" aria-label="Refresh data">↻</button><span id="account-email-label" class="account-email-label"></span><button class="button button-secondary" id="signout-button" type="button">Sign out</button></div>
+        <div class="topbar-actions"><span class="mode-tag"><span class="tiny-dot"></span> Private workspace</span><button class="icon-button" id="refresh-button" title="Refresh data" aria-label="Refresh data">↻</button><span id="account-email-label" class="account-email-label"></span><button class="button button-secondary" id="signout-button" type="button">Sign out</button></div>
       </header>
 
       <section class="page-heading" id="overview">
-        <div><div class="eyebrow"><span class="eyebrow-line"></span> AI QUALITY & RELIABILITY</div><h1>Evaluation workspace<span class="heading-period">.</span></h1><p class="page-subtitle">Measure model behavior. Catch regressions. Ship AI you can trust.</p></div>
+        <div><div class="eyebrow">AI quality and reliability</div><h1>Evaluation workspace<span class="heading-period">.</span></h1><p class="page-subtitle">Measure model behavior, inspect failures, and track changes over time.</p></div>
         <div class="heading-actions"><button class="button button-secondary" id="scroll-datasets">Browse datasets <span>↗</span></button><button class="button button-primary" id="new-run-button"><span>＋</span> New evaluation</button></div>
       </section>
 
       <section class="metric-grid" aria-label="Evaluation metrics">
         <article class="metric-card"><div class="metric-top"><span>Runs on this page</span><span class="metric-icon violet">◷</span></div><div class="metric-value" id="metric-runs">—</div><div class="metric-foot"><span class="metric-neutral">Use pagination to browse run history</span></div></article>
-        <article class="metric-card"><div class="metric-top"><span>Latest pass rate on page</span><span class="metric-icon green">✓</span></div><div class="metric-value" id="metric-pass-rate">—<small>%</small></div><div class="metric-foot"><span id="metric-pass-context" class="metric-neutral">Waiting for results</span></div></article>
+        <article class="metric-card metric-card-featured"><div class="metric-top"><span>Latest completed pass rate</span><span class="metric-icon green" aria-hidden="true">✓</span></div><div class="metric-value" id="metric-pass-rate">—<small>%</small></div><div class="metric-foot"><span id="metric-pass-context" class="metric-neutral">Waiting for results</span></div></article>
         <article class="metric-card"><div class="metric-top"><span>Cases on this page</span><span class="metric-icon blue">▤</span></div><div class="metric-value" id="metric-cases">—</div><div class="metric-foot"><span class="metric-neutral">Across completed runs on page</span></div></article>
         <article class="metric-card"><div class="metric-top"><span>Avg. latency on page</span><span class="metric-icon amber">⌁</span></div><div class="metric-value" id="metric-latency">—<small>ms</small></div><div class="metric-foot"><span class="metric-neutral">Successful and failed calls on page</span></div></article>
       </section>
 
       <section class="content-grid">
         <article class="panel run-creator" id="create-run-panel">
-          <div class="panel-heading"><div><div class="section-kicker">GET STARTED</div><h2>Run an evaluation</h2></div><span class="panel-number">01</span></div>
+          <div class="panel-heading"><div><div class="section-kicker">Start a test</div><h2>Run an evaluation</h2></div></div>
           <p class="panel-description">Choose a dataset and configuration. Your run executes in the background.</p>
           <form id="run-form" class="stack-form">
             <label for="dataset-select">Evaluation dataset <span class="required-mark">*</span></label>
             <select id="dataset-select" required><option value="">Loading datasets…</option></select>
             <div class="field-row"><div class="field-grow"><label for="provider-select">Provider</label><select id="provider-select"><option value="mock">Mock provider — no API key</option><option value="gemini">Google Gemini API</option><option value="openai">OpenAI API</option></select></div><div class="field-grow"><label for="model-input">Model label</label><input id="model-input" type="text" value="mock-v1" maxlength="150" placeholder="gemini-3.8-flash"></div></div>
-            <div class="field-grow"><label for="repeat-count">Repeated runs <span class="optional-label">RELIABILITY</span></label><input id="repeat-count" type="number" min="1" max="10" step="1" value="1" inputmode="numeric" aria-describedby="repeat-count-help"><small id="repeat-count-help" class="field-help">Set to 1 for a normal evaluation. Choose 2–10 to measure run-to-run variability. Repeats use the same dataset version and settings. Live providers repeat API calls and may increase usage/cost.</small></div>
-            <label for="system-prompt">System prompt <span class="optional-label">OPTIONAL</span></label>
+            <div class="field-grow"><label for="repeat-count">Repeated runs <span class="optional-label">Reliability</span></label><input id="repeat-count" type="number" min="1" max="10" step="1" value="1" inputmode="numeric" aria-describedby="repeat-count-help"><small id="repeat-count-help" class="field-help">Set to 1 for a normal evaluation. Choose 2–10 to measure run-to-run variability. Repeats use the same dataset version and settings. Live providers repeat API calls and may increase usage/cost.</small></div>
+            <label for="system-prompt">System prompt <span class="optional-label">Optional</span></label>
             <textarea id="system-prompt" rows="4" maxlength="12000">You are a careful customer-support assistant. Follow the instructions, use tools when needed, and do not invent facts.</textarea>
             <div class="provider-note" id="provider-note"><span class="note-icon">ⓘ</span><span>Mock mode uses saved fixtures for a repeatable run. Add a Gemini API key to <code>.env</code> to evaluate live model responses.</span></div>
             <button class="button button-primary button-wide" type="submit" id="run-submit"><span>▶</span> Start evaluation run <span class="button-arrow">→</span></button>
@@ -81,29 +135,29 @@
         </article>
 
         <article class="panel recent-panel" id="runs">
-          <div class="panel-heading"><div><div class="section-kicker">ACTIVITY</div><h2>Recent runs</h2></div><a class="text-link" href="#runs" id="view-all-runs">View all <span>↗</span></a></div>
-          <div class="table-wrap"><table class="data-table"><thead><tr><th>RUN / DATASET</th><th>STATUS</th><th>PASS RATE</th><th>CREATED</th><th></th></tr></thead><tbody id="runs-table-body"><tr><td colspan="5" class="empty-cell">Loading evaluation runs…</td></tr></tbody></table></div>
+          <div class="panel-heading"><div><div class="section-kicker">Workspace activity</div><h2>Recent runs</h2></div><a class="text-link" href="#runs" id="view-all-runs">View all <span>↗</span></a></div>
+          <div class="table-wrap"><table class="data-table"><thead><tr><th>Run and dataset</th><th>Status</th><th>Pass rate</th><th>Created</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="runs-table-body"><tr><td colspan="5" class="empty-cell">Loading evaluation runs…</td></tr></tbody></table></div>
           <div class="table-footer"><span id="runs-count">Showing recent runs</span><button class="subtle-button" id="runs-refresh">Refresh ↻</button></div>
           <div class="compare-bar" id="compare-bar" hidden><div><strong>Compare configurations</strong><span id="compare-label">Select two runs</span></div><button class="button button-secondary button-small" id="compare-button" disabled>Compare selected →</button><div class="compare-result" id="compare-result" hidden></div></div>
         </article>
       </section>
 
       <section class="panel results-panel" id="run-detail-panel" hidden>
-        <div class="panel-heading"><div><div class="section-kicker">RUN INSPECTOR</div><h2 id="detail-title">Evaluation details</h2></div><div class="detail-actions"><button class="button button-secondary button-small" id="cancel-run-button" hidden>Cancel run</button><button class="icon-button" id="close-detail-button" aria-label="Close detail">×</button></div></div>
+        <div class="panel-heading"><div><div class="section-kicker">Run inspector</div><h2 id="detail-title">Evaluation details</h2></div><div class="detail-actions"><button class="button button-secondary button-small" id="cancel-run-button" hidden>Cancel run</button><button class="icon-button" id="close-detail-button" aria-label="Close detail">×</button></div></div>
         <div id="detail-summary" class="detail-summary"></div>
         <section class="model-report-panel" id="model-report-panel" aria-labelledby="model-report-title">
-          <div class="model-report-heading"><div><div class="section-kicker">ROUTING & QUALITY</div><h3 id="model-report-title">Model-level reporting</h3><p id="model-report-caption">Requested model and actual execution routing will appear here.</p></div><span id="model-report-status" class="count-chip">Waiting for results</span></div>
+          <div class="model-report-heading"><div><div class="section-kicker">Routing and quality</div><h3 id="model-report-title">Model-level reporting</h3><p id="model-report-caption">Requested model and actual execution routing will appear here.</p></div><span id="model-report-status" class="count-chip">Waiting for results</span></div>
           <div id="model-report-summary" class="model-report-summary"></div>
-          <div class="table-wrap"><table class="data-table model-report-table"><thead><tr><th>ACTUAL MODEL</th><th>CASES</th><th>LLM CALLS</th><th>PASS RATE</th><th>PASS / FAIL / ERROR</th><th>AVG LATENCY</th><th>TOKENS IN / OUT</th><th>EST. COST</th><th>FALLBACKS</th></tr></thead><tbody id="model-report-table-body"><tr><td colspan="9" class="empty-cell">Select a run to inspect its model routing.</td></tr></tbody></table></div>
+          <div class="table-wrap"><table class="data-table model-report-table"><thead><tr><th>Actual model</th><th>Cases</th><th>LLM calls</th><th>Pass rate</th><th>Pass / fail / error</th><th>Average latency</th><th>Tokens in / out</th><th>Estimated cost</th><th>Fallbacks</th></tr></thead><tbody id="model-report-table-body"><tr><td colspan="9" class="empty-cell">Select a run to inspect its model routing.</td></tr></tbody></table></div>
           <p class="model-report-note" id="model-report-note"></p>
           <div class="fallback-summary" id="fallback-summary" hidden></div>
         </section>
-        <div class="table-wrap case-results-wrap"><table class="data-table results-table"><thead><tr><th>TEST CASE</th><th>ACTUAL MODEL / ROUTING</th><th>RESULT</th><th>SCORE</th><th>LATENCY</th><th>DETAIL</th></tr></thead><tbody id="results-table-body"><tr><td colspan="6" class="empty-cell">Select a run to inspect its cases.</td></tr></tbody></table></div>
+        <div class="table-wrap case-results-wrap"><table class="data-table results-table"><thead><tr><th>Test case</th><th>Actual model / routing</th><th>Result</th><th>Score</th><th>Latency</th><th>Detail</th></tr></thead><tbody id="results-table-body"><tr><td colspan="6" class="empty-cell">Select a run to inspect its cases.</td></tr></tbody></table></div>
         <div id="result-inspection" class="result-inspection" hidden></div>
       </section>
 
       <section class="panel campaign-panel" id="campaign-detail-panel" hidden>
-        <div class="panel-heading"><div><div class="section-kicker">REPEATED-RUN ANALYSIS</div><h2 id="campaign-detail-title">Reliability campaign</h2><p class="panel-description">Run-to-run variation across repeated evaluations using the same dataset version and configuration.</p></div><div class="detail-actions"><button class="button button-secondary button-small" id="cancel-campaign-button" hidden>Cancel campaign</button><button class="icon-button" id="close-campaign-button" aria-label="Close campaign analysis">×</button></div></div>
+        <div class="panel-heading"><div><div class="section-kicker">Repeated-run analysis</div><h2 id="campaign-detail-title">Reliability campaign</h2><p class="panel-description">Run-to-run variation across repeated evaluations using the same dataset version and configuration.</p></div><div class="detail-actions"><button class="button button-secondary button-small" id="cancel-campaign-button" hidden>Cancel campaign</button><button class="icon-button" id="close-campaign-button" aria-label="Close campaign analysis">×</button></div></div>
         <div id="campaign-detail-summary" class="detail-summary campaign-summary"></div>
         <p id="campaign-interpretation" class="campaign-note"></p>
         <div class="campaign-section-heading"><h3>Run-by-run results</h3><span id="campaign-run-count" class="count-chip">0 repetitions</span></div>
@@ -114,12 +168,12 @@
       </section>
 
       <section class="panel datasets-panel" id="datasets">
-        <div class="panel-heading"><div><div class="section-kicker">TEST COLLECTIONS</div><h2>Datasets</h2></div><span class="count-chip" id="dataset-count">0 datasets</span></div>
+        <div class="panel-heading"><div><div class="section-kicker">Test collections</div><h2>Datasets</h2></div><span class="count-chip" id="dataset-count">0 datasets</span></div>
         <div class="dataset-grid" id="dataset-grid"><div class="empty-state">Loading datasets…</div></div>
       </section>
 
       <section class="panel import-panel" id="import-dataset">
-        <div class="panel-heading"><div><div class="section-kicker">BRING YOUR OWN TESTS</div><h2 id="import-dataset-title">Import a dataset</h2></div><span class="panel-number">JSON</span></div>
+        <div class="panel-heading"><div><div class="section-kicker">Bring your own tests</div><h2 id="import-dataset-title">Import a dataset</h2></div><span class="panel-number">JSON</span></div>
         <p class="panel-description" id="dataset-form-description">Create a versioned dataset by pasting test cases. Use the example to see supported grading rules.</p>
         <details class="json-example"><summary>View example JSON format</summary><pre><code>{
   "name": "My AI agent tests",

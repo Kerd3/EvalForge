@@ -172,6 +172,7 @@ async function api(url, options = {}) {
       document.querySelector('.app-shell').hidden = true;
       document.querySelector('#account-gate').hidden = false;
       document.querySelector('#account-error').textContent = 'Your session expired. Sign in again to continue.';
+      document.querySelector('#account-error').hidden = false;
     }
     throw new Error(body?.error?.message ?? `Request failed (${response.status})`);
   }
@@ -349,11 +350,11 @@ function renderRuns() {
         ? `<button class="mini-action inspect-campaign" data-campaign-id="${escapeHtml(run.campaign_id)}" title="Inspect repeated-run reliability" aria-label="Inspect repeated-run reliability">◉</button>`
         : '';
       return `<tr>
-        <td><div class="run-name" title="${escapeHtml(run.id)}">${escapeHtml(run.dataset_name ?? 'Evaluation run')}</div><span class="run-sub">${escapeHtml(run.provider)} / requested: ${escapeHtml(run.model)}</span>${routingSummary}${repetitionLabel}</td>
-        <td><span class="status-pill ${escapeHtml(run.status)}">${escapeHtml(statusLabel(run.status))}</span></td>
-        <td class="rate-cell">${escapeHtml(metric)}${run.status === 'completed' ? `<span class="rate-track"><span class="rate-fill" style="display:block;width:${rate}%;"></span></span>` : ''}</td>
-        <td class="date-cell">${escapeHtml(formatDate(run.created_at))}</td>
-        <td><div class="row-actions"><button class="mini-action inspect-run" data-run-id="${escapeHtml(run.id)}" title="Inspect run" aria-label="Inspect run">↗</button>${campaignAction}${canCompare ? `<input class="compare-checkbox" type="checkbox" data-compare-id="${escapeHtml(run.id)}" aria-label="Select run to compare" ${isChecked ? 'checked' : ''}>` : ''}</div></td>
+        <td data-label="Run and dataset"><div class="run-name" title="${escapeHtml(run.id)}">${escapeHtml(run.dataset_name ?? 'Evaluation run')}</div><span class="run-sub">${escapeHtml(run.provider)} · requested ${escapeHtml(run.model)}</span>${routingSummary}${repetitionLabel}</td>
+        <td data-label="Status"><span class="status-pill ${escapeHtml(run.status)}">${escapeHtml(statusLabel(run.status))}</span></td>
+        <td class="rate-cell" data-label="Pass rate">${escapeHtml(metric)}${run.status === 'completed' ? `<span class="rate-track"><span class="rate-fill" style="display:block;width:${rate}%;"></span></span>` : ''}</td>
+        <td class="date-cell" data-label="Created">${escapeHtml(formatDate(run.created_at))}</td>
+        <td data-label="Actions"><div class="row-actions"><button class="mini-action inspect-run" data-run-id="${escapeHtml(run.id)}" title="Inspect run" aria-label="Inspect run">↗</button>${campaignAction}${canCompare ? `<input class="compare-checkbox" type="checkbox" data-compare-id="${escapeHtml(run.id)}" aria-label="Select run to compare" ${isChecked ? 'checked' : ''}>` : ''}</div></td>
       </tr>`;
     }).join('');
   }
@@ -961,11 +962,31 @@ let accountRegistrationEnabled = false;
 let accountRegisterMode = false;
 function setAccountMode(register) {
   accountRegisterMode = register;
-  $('#account-title').textContent = register ? 'Create your workspace account' : 'Sign in to your workspace';
-  $('#account-submit').textContent = register ? 'Create account' : 'Sign in';
+  $('#account-title').textContent = register ? 'Set up your workspace.' : 'Welcome back.';
+  $('#account-submit').textContent = register ? 'Sign up' : 'Sign in';
   $('#account-password').autocomplete = register ? 'new-password' : 'current-password';
+  $('#account-password').minLength = register ? 12 : 1;
+  $('#account-password-help').hidden = !register;
+  $('#account-confirm-wrap').hidden = !register;
+  $('#account-password-confirm').required = register;
   $('#account-bootstrap-wrap').hidden = !(register && $('#account-bootstrap-wrap').dataset.required === 'true');
+  $('#account-bootstrap').required = register && $('#account-bootstrap-wrap').dataset.required === 'true';
+  $('#account-signup-tab').hidden = !accountRegistrationEnabled;
+  $('#account-signin-tab').classList.toggle('is-active', !register);
+  $('#account-signup-tab').classList.toggle('is-active', register);
+  $('#account-signin-tab').setAttribute('aria-pressed', String(!register));
+  $('#account-signup-tab').setAttribute('aria-pressed', String(register));
+  $('#account-description').textContent = register
+    ? 'Create a private account for your datasets and evaluation history.'
+    : 'Open your workspace to continue testing model behavior.';
+  $('#account-switch-copy').textContent = register
+    ? 'Your datasets and evaluation history stay private to your account.'
+    : 'Secure access to your evaluation workspace.';
+  $('#account-password-confirm').value = '';
+  $('#account-password-confirm').setCustomValidity('');
+  $('#account-password-confirm').removeAttribute('aria-invalid');
   $('#account-error').textContent = '';
+  $('#account-error').hidden = true;
 }
 async function initializeAccount() {
   try {
@@ -981,37 +1002,105 @@ async function initializeAccount() {
     $('.app-shell').hidden = true;
     $('#account-gate').hidden = false;
     $('#account-bootstrap-wrap').dataset.required = String(info.bootstrap_required);
-    $('#account-bootstrap-wrap').hidden = true;
-    $('#account-mode').hidden = !info.registration_enabled;
     setAccountMode(false);
-    if (!info.registration_enabled) $('#account-description').textContent = 'Registration is disabled. Sign in with an account created by the instance administrator.';
+    if (!info.registration_enabled) {
+      $('#account-description').textContent = 'Registration is disabled. Sign in with an account created by the instance administrator.';
+    }
   } catch (error) {
     $('#account-gate').hidden = false;
     $('#account-error').textContent = error.message;
+    $('#account-error').hidden = false;
   }
 }
-$('#account-mode').addEventListener('click', () => {
-  setAccountMode(!accountRegisterMode);
-  $('#account-bootstrap-wrap').hidden = !(accountRegisterMode && $('#account-bootstrap-wrap').dataset.required === 'true');
+$('#account-signin-tab').addEventListener('click', () => setAccountMode(false));
+$('#account-signup-tab').addEventListener('click', () => {
+  if (accountRegistrationEnabled) setAccountMode(true);
 });
+document.querySelectorAll('[data-password-toggle]').forEach((button) => {
+  button.addEventListener('click', () => {
+    const input = button.parentElement.querySelector('input');
+    const visible = input.type === 'password';
+    input.type = visible ? 'text' : 'password';
+    button.textContent = visible ? 'Hide' : 'Show';
+    button.setAttribute('aria-label', `${visible ? 'Hide' : 'Show'} ${input.id === 'account-password-confirm' ? 'confirmation password' : 'password'}`);
+    button.setAttribute('aria-pressed', String(visible));
+  });
+});
+function updatePasswordConfirmation() {
+  const confirmation = $('#account-password-confirm');
+  if (!accountRegisterMode) return;
+  const matches = confirmation.value === $('#account-password').value;
+  confirmation.setCustomValidity(matches ? '' : 'Passwords do not match.');
+  if (matches) {
+    confirmation.removeAttribute('aria-invalid');
+    if ($('#account-error').textContent === 'Passwords do not match yet.') {
+      $('#account-error').textContent = '';
+      $('#account-error').hidden = true;
+    }
+  }
+}
+$('#account-password-confirm').addEventListener('input', updatePasswordConfirmation);
+$('#account-password').addEventListener('input', updatePasswordConfirmation);
 $('#account-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const form = $('#account-form');
+  const password = $('#account-password');
+  const confirmation = $('#account-password-confirm');
   const submit = $('#account-submit');
+  if (accountRegisterMode) {
+    const matches = password.value === confirmation.value;
+    confirmation.setCustomValidity(matches ? '' : 'Passwords do not match.');
+    if (!matches) confirmation.setAttribute('aria-invalid', 'true');
+    else confirmation.removeAttribute('aria-invalid');
+    if (!matches) {
+      $('#account-error').textContent = 'Passwords do not match yet.';
+      $('#account-error').hidden = false;
+      confirmation.focus();
+      return;
+    }
+  }
+  if (!form.reportValidity()) return;
   submit.disabled = true;
+  submit.setAttribute('aria-busy', 'true');
+  submit.textContent = accountRegisterMode ? 'Creating account…' : 'Signing in…';
   $('#account-error').textContent = '';
+  $('#account-error').hidden = true;
   try {
-    const payload = { email: $('#account-email').value, password: $('#account-password').value };
+    const payload = { email: $('#account-email').value.trim(), password: password.value };
     if (accountRegisterMode && $('#account-bootstrap-wrap').dataset.required === 'true') payload.bootstrap_secret = $('#account-bootstrap').value;
     await api(`/api/auth/${accountRegisterMode ? 'register' : 'login'}`, { method: 'POST', body: JSON.stringify(payload) });
     await initializeAccount();
-  } catch (error) { $('#account-error').textContent = error.message; }
-  finally { submit.disabled = false; }
+  } catch (error) {
+    $('#account-error').textContent = error.message;
+    $('#account-error').hidden = false;
+  }
+  finally {
+    submit.disabled = false;
+    submit.removeAttribute('aria-busy');
+    submit.textContent = accountRegisterMode ? 'Sign up' : 'Sign in';
+  }
 });
 $('#signout-button').addEventListener('click', async () => {
   try { await api('/api/auth/logout', { method: 'POST', body: '{}' }); }
   finally { window.location.reload(); }
 });
 initializeAccount();
+const navLinks = [...document.querySelectorAll('.nav-item[href^="#"]')];
+const navTargets = navLinks.map((link) => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+if ('IntersectionObserver' in window) {
+  const navObserver = new IntersectionObserver((entries) => {
+    const current = entries.filter((entry) => entry.isIntersecting)
+      .sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0];
+    if (!current) return;
+    for (const link of navLinks) {
+      const active = link.getAttribute('href') === `#${current.target.id}`;
+      link.classList.toggle('active', active);
+      if (active) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    }
+  }, { rootMargin: '-18% 0px -68% 0px', threshold: [0, .1, .25, .5] });
+  navTargets.forEach((target) => navObserver.observe(target));
+}
 window.setInterval(async () => {
   const hasActiveRun = state.runs.some((run) => ['queued', 'running'].includes(run.status))
     || ['queued', 'running'].includes(state.selectedCampaign?.status);
